@@ -24,24 +24,61 @@ interface Ctx {
 }
 interface Mode { update(dt: number): void; draw(): void }
 
-const MELEE_RE = /melee|sword|axe\b|bat\b|brawl|fist|punch|blade|katana|club|hammer|scythe|mace|dagger|pan\b|knight|slash|samurai|viking|sumo/i
+const MELEE_RE = /melee|sword|axe\b|bat\b|brawl|fist|punch|blade|katana|club|hammer|scythe|mace|dagger|pan\b|knight|slash|samurai|viking|sumo|spear|lance|rapier|whip|tornado|bash|gladiator|colosseum|coliseum|gauntlet|dummies|wrestl|pitchfork|lumberjack|shovel|brawler|fight|clash/i
 const IO_RE = /\bio\b|agar|orb eater|blob/i
 
 // ---------------------------------------------------------------- combat (shooter / melee / tank)
-interface Foe { kind: FoeKind; x: number; y: number; vx: number; vy: number; hp: number; max: number; r: number; spd: number; e: string; flash: number; fire: number; kx: number; ky: number; t: number }
-interface Bul { x: number; y: number; vx: number; vy: number; life: number; dmg: number; pierce: number; r: number; hostile: boolean; hit: Set<Foe> | null }
+interface Foe { kind: FoeKind; x: number; y: number; vx: number; vy: number; hp: number; max: number; r: number; spd: number; e: string; flash: number; fire: number; kx: number; ky: number; t: number; slow: number }
+interface Bul { x: number; y: number; vx: number; vy: number; life: number; dmg: number; pierce: number; r: number; hostile: boolean; hit: Set<Foe> | null; bounce?: number; stun?: boolean }
 interface Pick { x: number; y: number; k: 'heart' | 'coin' | 'rapid'; e: string; life: number }
 
 function combat(C: Ctx, mode: 'shooter' | 'melee' | 'tank'): Mode {
   const { env, ctx, k, ptr, fx, shake } = C
   const t = env.theme
   const rng = env.rng
-  const TOTAL = byDiff(env, 6, 8, 10)
   const dark = env.mods.has('dark')
   const fast = env.mods.has('fast') ? 1.2 : 1
   const touch = isTouch()
   const tankM = mode === 'tank'
-  const P = { x: W / 2, y: H / 2, vx: 0, vy: 0, hp: byDiff(env, 6, 5, 4), max: byDiff(env, 6, 5, 4), inv: 0, dash: 0, dashCd: 0, face: 0, hull: 0, cd: 0, swing: 0, swingA: 0, rapid: 0 }
+  const S0 = `${env.name} ${env.desc}`.toLowerCase()
+  const bossRush = env.mods.has('boss') || /titan|tyrant|throne|echoes|kaiju|\bhunt|wyvern|behemoth|chimera|hydra|wurm|beast|monster/.test(S0)
+  const TOTAL = bossRush ? byDiff(env, 3, 4, 5) : byDiff(env, 6, 8, 10)
+  const weapon: 'std' | 'ricochet' | 'backward' | 'orbit' | 'flame' | 'pull' | 'beam' | 'stun' | 'paint' =
+    mode !== 'shooter' ? 'std'
+      : /ricochet|bounce/.test(S0) ? 'ricochet'
+        : /backward|behind/.test(S0) ? 'backward'
+          : /orbit/.test(S0) ? 'orbit'
+            : /flame|water gun|pressure|short-range/.test(S0) ? 'flame'
+              : /magnet|vacuum|suck|fling/.test(S0) ? 'pull'
+                : env.mods.has('laser') || /laser|beam|flashlight/.test(S0) ? 'beam'
+                  : /bubble|snowball|slingshot/.test(S0) ? 'stun'
+                    : /paint/.test(S0) ? 'paint' : 'std'
+  const shieldOn = env.mods.has('shield') || /rotating shield/.test(S0)
+  const defend = /defend|protect|barricade|garden|flock|graveyard|basement|village|keep zombies/.test(S0)
+  const vehicle = /derby|hovercraft|buggy|bulldozer|spiked wheels|truck|hover tank|jetski|submarine|\bsub\b/.test(S0)
+  const ramOnly = /derby|bulldozer|spiked wheels/.test(S0)
+  const ringOut = /\bring\b|sumo|wrestl|bumper|joust/.test(S0) && mode === 'melee'
+  const spikes = /spike|\bpit\b|bash|bulldozer/.test(S0)
+  const mc = (() => {
+    if (/spear|lance|rapier|joust/.test(S0)) return { half: 0.3, reach: 108, cd: 0.36, kb: 120, dm: 1.2 }
+    if (/dagger|knife/.test(S0)) return { half: 0.6, reach: 52, cd: 0.17, kb: 90, dm: 0.6 }
+    if (/whip/.test(S0)) return { half: 0.32, reach: 122, cd: 0.4, kb: 200, dm: 1 }
+    if (/hammer|mace|flail|shovel/.test(S0)) return { half: Math.PI, reach: 80, cd: 0.8, kb: 330, dm: 1.6 }
+    if (/club|bat\b|pan\b|bash/.test(S0)) return { half: 1.2, reach: 66, cd: 0.55, kb: 310, dm: 1.4 }
+    if (/tornado|spin|ring of blades/.test(S0)) return { half: Math.PI, reach: 62, cd: 0.42, kb: 200, dm: 1 }
+    if (/scythe|katana|sweep/.test(S0)) return { half: 1.55, reach: 84, cd: 0.5, kb: 170, dm: 1 }
+    return { half: 0.85, reach: 60, cd: 0.4, kb: 170, dm: 1 }
+  })()
+  const ring = { r: Math.min(W, H) * 0.46, min: Math.min(W, H) * 0.24 }
+  const pits: { x: number; y: number; r: number }[] = []
+  if (spikes) for (let i = 0; i < 3; i++) pits.push({ x: W * (0.2 + 0.3 * i + 0.05 * (i % 2)), y: H * (i % 2 ? 0.28 : 0.72), r: 26 })
+  let coreHp = defend ? byDiff(env, 10, 8, 6) : 0
+  const coreMax = coreHp
+  const PG = 24
+  const paintCells = new Uint8Array(PG * PG)
+  let paintN = 0
+  let moveA = 0
+  const P = { x: W / 2, y: H / 2, vx: 0, vy: 0, hp: byDiff(env, 6, 5, 4), max: byDiff(env, 6, 5, 4), inv: 0, dash: 0, dashCd: 0, face: 0, hull: 0, cd: 0, swing: 0, swingA: 0, rapid: 0, beam: 0 }
   const S: Record<string, number> = {}
   let wave = 0
   let foes: Foe[] = []
@@ -57,7 +94,7 @@ function combat(C: Ctx, mode: 'shooter' | 'melee' | 'tank'): Mode {
   let combo = 0
   let comboT = 0
   const pillars: { x: number; y: number; r: number }[] = []
-  const np = tankM ? 6 : mode === 'melee' ? 2 : 4
+  const np = ringOut || defend ? 0 : spikes ? 1 : tankM ? 6 : mode === 'melee' ? 2 : 4
   for (let i = 0; i < np; i++) {
     const a = rng.range(0, TAU)
     const d = rng.range(80, 190)
@@ -65,7 +102,7 @@ function combat(C: Ctx, mode: 'shooter' | 'melee' | 'tank'): Mode {
     if (q.x > 40 && q.x < W - 40 && q.y > 40 && q.y < H - 40) pillars.push(q)
   }
   const stat = (n: string) => S[n] ?? 0
-  const hud = () => env.status(`Wave ${Math.min(wave, TOTAL)}/${TOTAL} · ${'❤️'.repeat(Math.max(0, P.hp))}`)
+  const hud = () => env.status(`${bossRush ? 'Boss' : 'Wave'} ${Math.min(wave, TOTAL)}/${TOTAL} · ${'❤️'.repeat(Math.max(0, P.hp))}${defend ? ` · Core ${coreHp}/${coreMax}` : ''}${weapon === 'paint' ? ` · Painted ${Math.round(covF() * 100)}%` : ''}`)
   const say = (s: string) => { banner = s; bannerT = 1.6 }
   const pushOut = (o: { x: number; y: number }, r: number) => {
     for (const q of pillars) {
@@ -80,13 +117,18 @@ function combat(C: Ctx, mode: 'shooter' | 'melee' | 'tank'): Mode {
   }
   const startWave = () => {
     wave++
-    const comp = waveComposition(wave, TOTAL, env.difficulty)
+    const comp = bossRush ? [{ kind: 'boss' as FoeKind, n: 1 }, { kind: 'grunt' as FoeKind, n: 1 + wave * 2 }] : waveComposition(wave, TOTAL, env.difficulty)
     queue = []
     for (const s of comp)
       for (let i = 0; i < s.n; i++) {
         const side = rng.int(0, 3)
-        const x = side === 0 ? 30 : side === 1 ? W - 30 : rng.range(40, W - 40)
-        const y = side === 2 ? 30 : side === 3 ? H - 30 : rng.range(40, H - 40)
+        let x = side === 0 ? 30 : side === 1 ? W - 30 : rng.range(40, W - 40)
+        let y = side === 2 ? 30 : side === 3 ? H - 30 : rng.range(40, H - 40)
+        if (ringOut) {
+          const a = rng.range(0, TAU)
+          x = W / 2 + Math.cos(a) * (ring.r - 24)
+          y = H / 2 + Math.sin(a) * (ring.r - 24)
+        }
         queue.push({ kind: s.kind, x, y, wait: s.kind === 'boss' ? 1.5 : rng.range(0, 1 + wave * 0.5) })
       }
     say(wave >= TOTAL ? 'BOSS!' : `WAVE ${wave}`)
@@ -99,11 +141,14 @@ function combat(C: Ctx, mode: 'shooter' | 'melee' | 'tank'): Mode {
     const base = {
       grunt: [2, 62, 13], runner: [1, 125, 11], brute: [9, 44, 21], shooter: [3, 52, 13], splitter: [5, 70, 16], boss: [60 + 14 * env.difficulty * 3, 46, 36],
     }[kind]
-    const hp = Math.max(1, Math.round(base[0] * (kind === 'boss' ? 1 : sc * (mode === 'melee' ? 1.3 : 1))))
+    const hp = Math.max(1, Math.round(base[0] * (kind === 'boss' ? (bossRush ? 1 + 0.6 * (wave - 1) : 1) : sc * (mode === 'melee' ? 1.3 : 1))))
     const idx = kind === 'grunt' ? 0 : kind === 'runner' ? 1 : kind === 'brute' ? 2 : kind === 'shooter' ? 3 : kind === 'splitter' ? 4 : 0
-    return { kind, x, y, vx: 0, vy: 0, hp, max: hp, r: base[2], spd: base[1] * d * (1 + wave * 0.025), e: t.foes[idx % t.foes.length], flash: 0, fire: 1 + rng() * 2, kx: 0, ky: 0, t: 0 }
+    const em = kind === 'boss' && bossRush ? t.foes[(wave + 1) % t.foes.length] : t.foes[idx % t.foes.length]
+    return { kind, x, y, vx: 0, vy: 0, hp, max: hp, r: base[2] * (kind === 'boss' && env.mods.has('giant') ? 1.4 : 1), spd: base[1] * d * (1 + wave * 0.025), e: em, flash: 0, fire: 1 + rng() * 2, kx: 0, ky: 0, t: 0, slow: 0 }
   }
   const aimAngle = () => {
+    if (weapon === 'orbit') return C.time * 3.4
+    if (weapon === 'backward') return moveA
     if (!touch && ptr.active) return Math.atan2(ptr.y - P.y, ptr.x - P.x)
     let best: Foe | null = null
     let bd = 1e9
@@ -113,14 +158,15 @@ function combat(C: Ctx, mode: 'shooter' | 'melee' | 'tank'): Mode {
     }
     return best ? Math.atan2(best.y - P.y, best.x - P.x) : P.face
   }
-  const dmg = () => (tankM ? 2.2 : mode === 'melee' ? 2 : 1) * (1 + 0.3 * stat('dmg'))
-  const cdBase = () => (tankM ? 0.55 : mode === 'melee' ? 0.4 : 0.26) / ((1 + 0.2 * stat('rate')) * (P.rapid > 0 ? 1.8 : 1))
+  const covF = () => paintN / (PG * PG)
+  const dmg = () => (tankM ? 2.2 : mode === 'melee' ? 2 * mc.dm : weapon === 'flame' ? 0.45 : weapon === 'beam' ? 0.3 : 1) * (1 + 0.3 * stat('dmg')) * (weapon === 'paint' ? 1 + covF() * 1.6 : 1)
+  const cdBase = () => (tankM ? 0.55 : mode === 'melee' ? mc.cd : weapon === 'flame' ? 0.07 : weapon === 'beam' ? 0.06 : weapon === 'stun' ? 0.4 : 0.26) / ((1 + 0.2 * stat('rate')) * (P.rapid > 0 ? 1.8 : 1))
 
   const attack = () => {
     const a = P.face
     if (mode === 'melee') {
-      const half = 0.85 + 0.3 * stat('multi')
-      const reach = (60 + 10 * stat('range')) * 1
+      const half = Math.min(Math.PI, mc.half + 0.3 * stat('multi'))
+      const reach = (mc.reach + 10 * stat('range')) * 1
       P.swing = 0.18
       P.swingA = a
       sweeps.push({ x: P.x, y: P.y, a, w: half, r: reach, life: 0.18 })
@@ -134,17 +180,35 @@ function combat(C: Ctx, mode: 'shooter' | 'melee' | 'tank'): Mode {
         da = Math.atan2(Math.sin(da), Math.cos(da))
         if (Math.abs(da) > half) continue
         hurtFoe(f, dmg())
-        const kb = (f.kind === 'boss' ? 40 : 170 + 110 * stat('pierce')) / (f.kind === 'brute' ? 2 : 1)
+        const kb = ((f.kind === 'boss' ? 40 : mc.kb + 110 * stat('pierce')) / (f.kind === 'brute' ? 2 : 1)) * (ringOut ? 1.8 : 1)
         f.kx = (dx / d) * kb
         f.ky = (dy / d) * kb
       }
       return
     }
+    if (weapon === 'beam') {
+      P.beam = 0.07
+      const dx = Math.cos(a)
+      const dy = Math.sin(a)
+      for (const f of foes) {
+        const px = f.x - P.x
+        const py = f.y - P.y
+        const al = px * dx + py * dy
+        if (al < 0 || al > 520) continue
+        if (Math.abs(px * dy - py * dx) < f.r + 6) hurtFoe(f, dmg())
+      }
+      return
+    }
     const n = 1 + stat('multi') + (tankM ? 0 : 0)
-    const sp = (tankM ? 400 : 480) * (1 + 0.1 * stat('range'))
+    const sp = (tankM ? 400 : weapon === 'flame' ? 330 : weapon === 'stun' ? 300 : 480) * (1 + 0.1 * stat('range'))
     for (let i = 0; i < n; i++) {
       const o = (i - (n - 1) / 2) * 0.16
-      buls.push({ x: P.x + Math.cos(a) * 18, y: P.y + Math.sin(a) * 18, vx: Math.cos(a + o) * sp, vy: Math.sin(a + o) * sp, life: 1 + 0.12 * stat('range'), dmg: dmg(), pierce: stat('pierce'), r: tankM ? 6 : 4, hostile: false, hit: new Set() })
+      const jit = weapon === 'flame' ? (rng() - 0.5) * 0.5 : 0
+      buls.push({
+        x: P.x + Math.cos(a) * 18, y: P.y + Math.sin(a) * 18, vx: Math.cos(a + o + jit) * sp, vy: Math.sin(a + o + jit) * sp,
+        life: (weapon === 'flame' ? 0.3 : weapon === 'stun' ? 1.3 : 1) + 0.12 * stat('range'), dmg: dmg(), pierce: weapon === 'flame' ? 99 : stat('pierce'),
+        r: tankM ? 6 : weapon === 'flame' ? 8 : weapon === 'stun' ? 9 : 4, hostile: false, hit: new Set(), bounce: weapon === 'ricochet' ? 3 : undefined, stun: weapon === 'stun' || undefined,
+      })
     }
     if (tankM) { P.vx -= Math.cos(a) * 90; P.vy -= Math.sin(a) * 90; shake.kick(2) }
     env.sfx('shoot')
@@ -236,12 +300,22 @@ function combat(C: Ctx, mode: 'shooter' | 'melee' | 'tank'): Mode {
       fx.burst(P.x, P.y, t.accent, 8, 120, 3)
     }
     if (P.dash <= 0) {
-      P.vx += ((ax.x / len) * sp - P.vx) * Math.min(1, dt * 12)
-      P.vy += ((ax.y / len) * sp - P.vy) * Math.min(1, dt * 12)
+      P.vx += ((ax.x / len) * sp - P.vx) * Math.min(1, dt * (vehicle ? 2.6 : 12))
+      P.vy += ((ax.y / len) * sp - P.vy) * Math.min(1, dt * (vehicle ? 2.6 : 12))
     }
     P.x = clamp(P.x + P.vx * dt, 16, W - 16)
     P.y = clamp(P.y + P.vy * dt, 16, H - 16)
     pushOut(P, 14)
+    P.beam = Math.max(0, P.beam - dt)
+    if (Math.hypot(P.vx, P.vy) > 30) moveA = Math.atan2(-P.vy, -P.vx)
+    if (ringOut) {
+      if (/shrinking/.test(S0)) ring.r = Math.max(ring.min, ring.r - dt * 1.4)
+      const rx = P.x - W / 2
+      const ry = P.y - H / 2
+      const rd = Math.hypot(rx, ry)
+      if (rd > ring.r - 14) { P.x = W / 2 + (rx / rd) * (ring.r - 14); P.y = H / 2 + (ry / rd) * (ring.r - 14) }
+    }
+    for (const q of pits) if (Math.hypot(P.x - q.x, P.y - q.y) < q.r + 6) hurtPlayer(q.x, q.y)
     if (tankM && (ax.x || ax.y)) {
       let da = Math.atan2(ax.y, ax.x) - P.hull
       da = Math.atan2(Math.sin(da), Math.cos(da))
@@ -251,8 +325,17 @@ function combat(C: Ctx, mode: 'shooter' | 'melee' | 'tank'): Mode {
     // attacks
     P.cd -= dt
     const auto = touch || !ptr.active
-    const want = ptr.down || k.down('a') || (auto && foes.length > 0)
-    if (want && P.cd <= 0 && C.intro <= 0.15) {
+    const want = !ramOnly && (ptr.down || k.down('a') || (auto && foes.length > 0))
+    if (weapon === 'pull' && want && C.intro <= 0.15) {
+      P.beam = 0.1
+      for (const f of foes) {
+        const fx0 = P.x - f.x
+        const fy0 = P.y - f.y
+        const fd = Math.hypot(fx0, fy0) || 1
+        if (fd < 230 && f.kind !== 'boss') { f.kx += (fx0 / fd) * 620 * dt; f.ky += (fy0 / fd) * 620 * dt }
+        if (fd < 46) hurtFoe(f, 2.2 * dt * (1 + 0.3 * stat('dmg')))
+      }
+    } else if (want && P.cd <= 0 && C.intro <= 0.15) {
       P.cd = cdBase()
       attack()
     }
@@ -274,13 +357,49 @@ function combat(C: Ctx, mode: 'shooter' | 'melee' | 'tank'): Mode {
       const d = Math.hypot(dx, dy) || 1
       let mv = 1
       if (f.kind === 'shooter') mv = d > 190 ? 1 : d < 130 ? -0.7 : 0.15
-      f.vx = (dx / d) * f.spd * mv + (-dy / d) * f.spd * 0.25 * Math.sin(f.t + f.max) + f.kx
-      f.vy = (dy / d) * f.spd * mv + (dx / d) * f.spd * 0.25 * Math.sin(f.t + f.max) + f.ky
+      f.slow = Math.max(0, f.slow - dt)
+      const sl = f.slow > 0 ? 0.35 : 1
+      let mdx = dx
+      let mdy = dy
+      let md = d
+      if (defend && d > 130) {
+        mdx = W / 2 - f.x
+        mdy = H / 2 - f.y
+        md = Math.hypot(mdx, mdy) || 1
+        if (md < f.r + 24) {
+          f.hp = -1
+          coreHp--
+          shake.kick(8)
+          env.sfx('hit')
+          fx.burst(f.x, f.y, t.danger, 12, 160, 3)
+          hud()
+          if (coreHp <= 0 && !C.over) {
+            C.over = true
+            env.sfx('lose')
+            env.end({ score: C.score, won: false, text: `The core fell on wave ${wave}` })
+          }
+          continue
+        }
+      }
+      f.vx = ((mdx / md) * f.spd * mv + (-mdy / md) * f.spd * 0.25 * Math.sin(f.t + f.max)) * sl + f.kx
+      f.vy = ((mdy / md) * f.spd * mv + (mdx / md) * f.spd * 0.25 * Math.sin(f.t + f.max)) * sl + f.ky
       f.kx *= Math.max(0, 1 - dt * 7)
       f.ky *= Math.max(0, 1 - dt * 7)
       f.x = clamp(f.x + f.vx * dt, 10, W - 10)
       f.y = clamp(f.y + f.vy * dt, 10, H - 10)
       pushOut(f, f.r * 0.8)
+      if (ringOut && Math.hypot(f.x - W / 2, f.y - H / 2) > ring.r + 4 && f.hp > 0) { C.add(60); say('RING OUT!'); hurtFoe(f, 9999) }
+      for (const q of pits) if (f.hp > 0 && Math.hypot(f.x - q.x, f.y - q.y) < q.r) { C.add(40); hurtFoe(f, 9999) }
+      const pspd = Math.hypot(P.vx, P.vy)
+      const rams = vehicle && pspd > 150
+      if (rams && d < f.r + 18 && f.hp > 0) {
+        hurtFoe(f, 2 + pspd / 160)
+        f.kx += (-dx / d) * 380
+        f.ky += (-dy / d) * 380
+        P.vx *= 0.75
+        P.vy *= 0.75
+        shake.kick(3)
+      }
       if (f.kind === 'shooter' || f.kind === 'boss') {
         f.fire -= dt
         if (f.fire <= 0) {
@@ -298,16 +417,30 @@ function combat(C: Ctx, mode: 'shooter' | 'melee' | 'tank'): Mode {
           }
         }
       }
-      if (d < f.r + 11) hurtPlayer(f.x, f.y)
+      if (d < f.r + 11 && !rams) hurtPlayer(f.x, f.y)
     }
     // bullets
     for (const b of buls) {
       b.x += b.vx * dt
       b.y += b.vy * dt
       b.life -= dt
+      if (b.bounce) {
+        if (b.x < 0 || b.x > W) { b.vx = -b.vx; b.x = clamp(b.x, 0, W); b.bounce-- }
+        if (b.y < 0 || b.y > H) { b.vy = -b.vy; b.y = clamp(b.y, 0, H); b.bounce-- }
+      }
       if (b.x < 0 || b.x > W || b.y < 0 || b.y > H) b.life = 0
+      if (weapon === 'paint' && !b.hostile) {
+        const ci = Math.floor(clamp(b.y / H, 0, 0.999) * PG) * PG + Math.floor(clamp(b.x / W, 0, 0.999) * PG)
+        if (!paintCells[ci]) { paintCells[ci] = 1; paintN++; if (paintN % 20 === 0) hud() }
+      }
       for (const q of pillars) if ((b.x - q.x) ** 2 + (b.y - q.y) ** 2 < (q.r + b.r) ** 2) { b.life = 0; fx.burst(b.x, b.y, '#fff', 3, 80, 2) }
       if (b.life <= 0) continue
+      if (b.hostile && shieldOn) {
+        const bd = Math.hypot(b.x - P.x, b.y - P.y)
+        let da = Math.atan2(b.y - P.y, b.x - P.x) - P.face
+        da = Math.atan2(Math.sin(da), Math.cos(da))
+        if (bd < 36 && Math.abs(da) < 1.0) { b.life = 0; fx.burst(b.x, b.y, '#fff', 3, 90, 2); env.sfx('click'); continue }
+      }
       if (b.hostile) {
         if ((b.x - P.x) ** 2 + (b.y - P.y) ** 2 < (11 + b.r) ** 2) {
           hurtPlayer(b.x, b.y)
@@ -319,6 +452,7 @@ function combat(C: Ctx, mode: 'shooter' | 'melee' | 'tank'): Mode {
           if ((b.x - f.x) ** 2 + (b.y - f.y) ** 2 < (f.r + b.r) ** 2) {
             b.hit!.add(f)
             hurtFoe(f, b.dmg)
+            if (b.stun) f.slow = 3
             if (b.hit!.size > b.pierce) { b.life = 0; break }
           }
         }
@@ -382,6 +516,54 @@ function combat(C: Ctx, mode: 'shooter' | 'melee' | 'tank'): Mode {
     ctx.globalAlpha = 0.5
     ctx.strokeRect(2, 2, W - 4, H - 4)
     ctx.globalAlpha = 1
+    if (weapon === 'paint') {
+      ctx.fillStyle = t.accent
+      ctx.globalAlpha = 0.28
+      for (let i = 0; i < PG * PG; i++) if (paintCells[i]) ctx.fillRect((i % PG) * (W / PG), Math.floor(i / PG) * (H / PG), W / PG + 1, H / PG + 1)
+      ctx.globalAlpha = 1
+    }
+    if (ringOut) {
+      ctx.fillStyle = 'rgba(0,0,0,.55)'
+      ctx.beginPath()
+      ctx.rect(0, 0, W, H)
+      ctx.arc(W / 2, H / 2, ring.r, 0, TAU, true)
+      ctx.fill('evenodd')
+      ctx.strokeStyle = t.danger
+      ctx.lineWidth = 5
+      ctx.shadowColor = t.danger
+      ctx.shadowBlur = 12
+      ctx.beginPath()
+      ctx.arc(W / 2, H / 2, ring.r, 0, TAU)
+      ctx.stroke()
+      ctx.shadowBlur = 0
+    }
+    for (const q of pits) {
+      ctx.fillStyle = '#111'
+      ctx.beginPath()
+      ctx.arc(q.x, q.y, q.r, 0, TAU)
+      ctx.fill()
+      ctx.fillStyle = '#cbd5e1'
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * TAU
+        ctx.beginPath()
+        ctx.moveTo(q.x + Math.cos(a - 0.2) * q.r * 0.8, q.y + Math.sin(a - 0.2) * q.r * 0.8)
+        ctx.lineTo(q.x + Math.cos(a) * q.r * 0.2, q.y + Math.sin(a) * q.r * 0.2)
+        ctx.lineTo(q.x + Math.cos(a + 0.2) * q.r * 0.8, q.y + Math.sin(a + 0.2) * q.r * 0.8)
+        ctx.fill()
+      }
+    }
+    if (defend) {
+      ctx.strokeStyle = t.good
+      ctx.lineWidth = 3
+      ctx.globalAlpha = 0.5
+      ctx.beginPath()
+      ctx.arc(W / 2, H / 2, 28, 0, TAU)
+      ctx.stroke()
+      ctx.globalAlpha = 1
+      emoji(ctx, t.items[0], W / 2, H / 2, 34)
+      roundRect(ctx, W / 2 - 24, H / 2 + 32, 48, 5, 2, 'rgba(0,0,0,.5)')
+      roundRect(ctx, W / 2 - 24, H / 2 + 32, 48 * (coreHp / coreMax), 5, 2, t.good)
+    }
     for (const q of pillars) {
       ctx.fillStyle = 'rgba(0,0,0,.3)'
       ctx.beginPath()
@@ -447,6 +629,44 @@ function combat(C: Ctx, mode: 'shooter' | 'melee' | 'tank'): Mode {
       ctx.fill()
     }
     ctx.shadowBlur = 0
+    if (P.beam > 0 && weapon === 'beam') {
+      ctx.strokeStyle = '#fff'
+      ctx.shadowColor = t.accent2
+      ctx.shadowBlur = 16
+      ctx.lineWidth = 5
+      ctx.beginPath()
+      ctx.moveTo(P.x, P.y)
+      ctx.lineTo(P.x + Math.cos(P.face) * 520, P.y + Math.sin(P.face) * 520)
+      ctx.stroke()
+      ctx.shadowBlur = 0
+    }
+    if (P.beam > 0 && weapon === 'pull') {
+      ctx.strokeStyle = t.accent2
+      ctx.globalAlpha = 0.5
+      ctx.lineWidth = 2
+      for (let i = 0; i < 3; i++) {
+        ctx.beginPath()
+        ctx.arc(P.x, P.y, 230 - ((C.time * 160 + i * 77) % 230), 0, TAU)
+        ctx.stroke()
+      }
+      ctx.globalAlpha = 1
+    }
+    if (shieldOn) {
+      ctx.strokeStyle = '#38bdf8'
+      ctx.lineWidth = 6
+      ctx.shadowColor = '#38bdf8'
+      ctx.shadowBlur = 10
+      ctx.beginPath()
+      ctx.arc(P.x, P.y, 30, P.face - 1, P.face + 1)
+      ctx.stroke()
+      ctx.shadowBlur = 0
+    }
+    if (weapon === 'orbit') {
+      ctx.fillStyle = t.accent2
+      ctx.beginPath()
+      ctx.arc(P.x + Math.cos(P.face) * 28, P.y + Math.sin(P.face) * 28, 6, 0, TAU)
+      ctx.fill()
+    }
     // player
     if (P.inv <= 0 || Math.floor(C.time * 16) % 2) {
       ctx.save()
@@ -962,7 +1182,7 @@ const engine: Engine = {
     const ast = /asteroid/i.test(env.name)
     const tank = mods.has('tank') || /\btank/i.test(env.name)
     const melee = mods.has('melee') || MELEE_RE.test(`${env.name} ${env.desc}`)
-    const kind = ast ? 'asteroids' : io ? 'io' : tank ? 'tank' : melee ? 'melee' : 'shooter'
+    const kind = ast ? 'asteroids' : io && !(tank && /battle/i.test(`${env.name} ${env.desc}`) || mods.has('battle') && tank) ? 'io' : tank ? 'tank' : melee ? 'melee' : 'shooter'
     bag.add(vpad(env.host, k, 'dpad', kind === 'io' ? [] : kind === 'asteroids' ? [{ action: 'a', label: '🔥' }, { action: 'b', label: '🌀' }] : [{ action: 'b', label: '💨' }]))
     const C: Ctx = {
       env, st, ctx: st.ctx, k, ptr, fx, shake, time: 0, intro: 2.6, over: false, score: 0,
