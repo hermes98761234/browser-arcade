@@ -1,0 +1,20 @@
+// Vocabulary: [English, Spanish, French, German, Ukrainian] (part 2).
+export const LANG_B: string[][] = [
+  ['yellow', 'amarillo', 'jaune', 'gelb', 'жовтий'], ['black', 'negro', 'noir', 'schwarz', 'чорний'], ['white', 'blanco', 'blanc', 'weiß', 'білий'],
+  ['big', 'grande', 'grand', 'groß', 'великий'], ['small', 'pequeño', 'petit', 'klein', 'малий'], ['good', 'bueno', 'bon', 'gut', 'добрий'],
+  ['bad', 'malo', 'mauvais', 'schlecht', 'поганий'], ['hot', 'caliente', 'chaud', 'heiß', 'гарячий'], ['cold', 'frío', 'froid', 'kalt', 'холодний'],
+  ['new', 'nuevo', 'nouveau', 'neu', 'новий'], ['old', 'viejo', 'vieux', 'alt', 'старий'], ['happy', 'feliz', 'heureux', 'glücklich', 'щасливий'],
+  ['yes', 'sí', 'oui', 'ja', 'так'], ['no', 'no', 'non', 'nein', 'ні'], ['hello', 'hola', 'bonjour', 'Hallo', 'привіт'],
+  ['goodbye', 'adiós', 'au revoir', 'Auf Wiedersehen', 'до побачення'], ['please', 'por favor', 's\'il vous plaît', 'bitte', 'будь ласка'],
+  ['thank you', 'gracias', 'merci', 'danke', 'дякую'], ['one', 'uno', 'un', 'eins', 'один'], ['two', 'dos', 'deux', 'zwei', 'два'],
+  ['three', 'tres', 'trois', 'drei', 'три'], ['four', 'cuatro', 'quatre', 'vier', 'чотири'], ['five', 'cinco', 'cinq', 'fünf', 'п\'ять'],
+  ['ten', 'diez', 'dix', 'zehn', 'десять'], ['day', 'día', 'jour', 'Tag', 'день'], ['night', 'noche', 'nuit', 'Nacht', 'ніч'],
+  ['morning', 'mañana', 'matin', 'Morgen', 'ранок'], ['week', 'semana', 'semaine', 'Woche', 'тиждень'], ['year', 'año', 'an', 'Jahr', 'рік'],
+  ['time', 'tiempo', 'temps', 'Zeit', 'час'], ['hand', 'mano', 'main', 'Hand', 'рука'], ['head', 'cabeza', 'tête', 'Kopf', 'голова'],
+  ['eye', 'ojo', 'œil', 'Auge', 'око'], ['heart', 'corazón', 'cœur', 'Herz', 'серце'], ['foot', 'pie', 'pied', 'Fuß', 'нога'],
+  ['love', 'amor', 'amour', 'Liebe', 'любов'], ['food', 'comida', 'nourriture', 'Essen', 'їжа'], ['music', 'música', 'musique', 'Musik', 'музика'],
+  ['money', 'dinero', 'argent', 'Geld', 'гроші'], ['work', 'trabajo', 'travail', 'Arbeit', 'робота'], ['game', 'juego', 'jeu', 'Spiel', 'гра'],
+  ['song', 'canción', 'chanson', 'Lied', 'пісня'], ['garden', 'jardín', 'jardin', 'Garten', 'сад'], ['kitchen', 'cocina', 'cuisine', 'Küche', 'кухня'],
+  ['shop', 'tienda', 'magasin', 'Geschäft', 'магазин'], ['key', 'llave', 'clé', 'Schlüssel', 'ключ'], ['letter', 'carta', 'lettre', 'Brief', 'лист'],
+  ['world', 'mundo', 'monde', 'Welt', 'світ'], ['country', 'país', 'pays', 'Land', 'країна'], ['fire', 'fuego', 'feu', 'Feuer', 'вогонь'],
+]

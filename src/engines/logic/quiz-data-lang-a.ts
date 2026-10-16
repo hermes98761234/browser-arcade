@@ -1,0 +1,21 @@
+// Vocabulary: [English, Spanish, French, German, Ukrainian] (part 1).
+export const LANG_A: string[][] = [
+  ['apple', 'manzana', 'pomme', 'Apfel', 'яблуко'], ['water', 'agua', 'eau', 'Wasser', 'вода'], ['bread', 'pan', 'pain', 'Brot', 'хліб'],
+  ['milk', 'leche', 'lait', 'Milch', 'молоко'], ['cheese', 'queso', 'fromage', 'Käse', 'сир'], ['egg', 'huevo', 'œuf', 'Ei', 'яйце'],
+  ['fish', 'pescado', 'poisson', 'Fisch', 'риба'], ['meat', 'carne', 'viande', 'Fleisch', 'м\'ясо'], ['rice', 'arroz', 'riz', 'Reis', 'рис'],
+  ['sugar', 'azúcar', 'sucre', 'Zucker', 'цукор'], ['salt', 'sal', 'sel', 'Salz', 'сіль'], ['coffee', 'café', 'café', 'Kaffee', 'кава'],
+  ['tea', 'té', 'thé', 'Tee', 'чай'], ['house', 'casa', 'maison', 'Haus', 'будинок'], ['door', 'puerta', 'porte', 'Tür', 'двері'],
+  ['window', 'ventana', 'fenêtre', 'Fenster', 'вікно'], ['table', 'mesa', 'table', 'Tisch', 'стіл'], ['chair', 'silla', 'chaise', 'Stuhl', 'стілець'],
+  ['bed', 'cama', 'lit', 'Bett', 'ліжко'], ['book', 'libro', 'livre', 'Buch', 'книга'], ['pen', 'bolígrafo', 'stylo', 'Stift', 'ручка'],
+  ['school', 'escuela', 'école', 'Schule', 'школа'], ['teacher', 'maestro', 'professeur', 'Lehrer', 'вчитель'], ['friend', 'amigo', 'ami', 'Freund', 'друг'],
+  ['mother', 'madre', 'mère', 'Mutter', 'мама'], ['father', 'padre', 'père', 'Vater', 'тато'], ['brother', 'hermano', 'frère', 'Bruder', 'брат'],
+  ['sister', 'hermana', 'sœur', 'Schwester', 'сестра'], ['child', 'niño', 'enfant', 'Kind', 'дитина'], ['dog', 'perro', 'chien', 'Hund', 'собака'],
+  ['cat', 'gato', 'chat', 'Katze', 'кіт'], ['bird', 'pájaro', 'oiseau', 'Vogel', 'птах'], ['horse', 'caballo', 'cheval', 'Pferd', 'кінь'],
+  ['cow', 'vaca', 'vache', 'Kuh', 'корова'], ['sun', 'sol', 'soleil', 'Sonne', 'сонце'], ['moon', 'luna', 'lune', 'Mond', 'місяць'],
+  ['star', 'estrella', 'étoile', 'Stern', 'зірка'], ['sky', 'cielo', 'ciel', 'Himmel', 'небо'], ['rain', 'lluvia', 'pluie', 'Regen', 'дощ'],
+  ['snow', 'nieve', 'neige', 'Schnee', 'сніг'], ['wind', 'viento', 'vent', 'Wind', 'вітер'], ['tree', 'árbol', 'arbre', 'Baum', 'дерево'],
+  ['flower', 'flor', 'fleur', 'Blume', 'квітка'], ['river', 'río', 'rivière', 'Fluss', 'річка'], ['sea', 'mar', 'mer', 'Meer', 'море'],
+  ['mountain', 'montaña', 'montagne', 'Berg', 'гора'], ['city', 'ciudad', 'ville', 'Stadt', 'місто'], ['street', 'calle', 'rue', 'Straße', 'вулиця'],
+  ['car', 'coche', 'voiture', 'Auto', 'машина'], ['train', 'tren', 'train', 'Zug', 'потяг'], ['boat', 'barco', 'bateau', 'Boot', 'човен'],
+  ['red', 'rojo', 'rouge', 'rot', 'червоний'], ['blue', 'azul', 'bleu', 'blau', 'синій'], ['green', 'verde', 'vert', 'grün', 'зелений'],
+]
