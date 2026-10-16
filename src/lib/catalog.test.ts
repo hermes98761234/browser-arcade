@@ -57,3 +57,13 @@ describe('characters', () => {
     expect(new Set(games.map((g) => g.hero)).size).toBeGreaterThan(80)
   })
 })
+
+describe('playability', () => {
+  it('every catalog game has an implemented engine and a preview', async () => {
+    const { readdirSync } = await import('node:fs')
+    const engines = new Set(readdirSync('src/engines/games').map((f) => f.replace(/\.ts$/, '')))
+    const previews = new Set(readdirSync('src/previews').map((f) => f.replace(/\.ts$/, '')))
+    expect(games.filter((g) => !engines.has(g.engine))).toEqual([])
+    expect(ENGINE_IDS.filter((e) => !previews.has(e))).toEqual([])
+  })
+})

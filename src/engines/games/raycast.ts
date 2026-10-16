@@ -319,7 +319,7 @@ const engine: Engine = {
       if (p.button === 0 && !touch) {
         if (!locked && moved < 6) {
           try {
-            void lockEl.requestPointerLock?.()
+            try { Promise.resolve(lockEl.requestPointerLock?.()).catch(() => {}) } catch { /* pointer lock unavailable (iframe, headless) */ }
           } catch { /* ignore */ }
         }
       }
