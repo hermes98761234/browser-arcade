@@ -1,6 +1,6 @@
 // Racer: OutRun-style pseudo-3D road racer (curves, hills, rivals, checkpoints, nitro) and a top-down drift kart mode.
 // Mode is picked from the name/description: kart / top-down / drift / tabletop / formula / oval / lawn → top-down circuit.
-// "highway / traffic / lanes / dodge / endless" → traffic dodging with no laps. Two players: single player vs more rivals.
+// "highway / traffic / lanes / dodge / endless" → traffic dodging with no laps. Two players: local split-screen top-down kart race (WASD vs arrows).
 import { background, Bag, byDiff, clamp, createStage, emoji, isTouch, keys, loop, Particles, pointer, Shake, text, vpad, type Engine } from '../kit'
 import { buildRoad, buildTopTrack, SEG } from '../logic/racer'
 
@@ -29,17 +29,19 @@ const engine: Engine = {
     const narrow = W < 600
     const st = createStage(env.host, W, H)
     const ctx = st.ctx
-    const k = keys()
+    const two = env.players === 2
+    const k = keys({ twoPlayer: two })
     const bag = new Bag()
     const fx = new Particles()
     const shake = new Shake()
     const ptr = pointer(st)
     const blurb = `${env.name} ${env.desc}`.toLowerCase()
-    const topdown = /top-down|topdown|kart|drift|tabletop|micro machines|formula|oval|lawn|mower|ghost lap|ram racer|bike/.test(blurb)
+    const sprintMode = mods.has('swim') || /swim|slurp|noodle|snail mail|tandem|pedal|sprint/.test(blurb)
+    const topdown = two || /top-down|topdown|kart|drift|tabletop|micro machines|formula|oval|lawn|mower|ghost lap|ram racer|bike|bumper/.test(blurb)
     const traffic = !topdown && (mods.has('endless') || /highway|traffic|lanes|dodge|wrecks|warrior/.test(blurb))
     const dark = mods.has('dark') || /night|ghost|haunt/.test(blurb)
     const wind = mods.has('wind')
-    const ram = mods.has('melee') || /ram|crash|derby|warrior/.test(blurb)
+    const ram = mods.has('melee') || /ram|crash|derby|warrior|bumper|crush|monster truck|battle/.test(blurb)
     const zen = mods.has('zen')
     const auto = isTouch()
     const speedMul = mods.has('fast') ? 1.15 : mods.has('slow') ? 0.88 : 1
@@ -586,7 +588,9 @@ const engine: Engine = {
       const P = track.pts
       const n = P.length
       const laps = byDiff(env, 2, 3, 3)
-      const nRivals = byDiff(env, 5, 6, 7)
+      // local two-player split-screen: fewer AI karts, two human karts (WASD vs arrows)
+      const nH = two ? 2 : 1
+      const nRivals = two ? byDiff(env, 2, 4, 4) : byDiff(env, 5, 6, 7)
       const maxV = 330 * speedMul
       const dir = (i: number) => {
         const a = P[(i + n) % n]
@@ -594,6 +598,7 @@ const engine: Engine = {
         return Math.atan2(b.y - a.y, b.x - a.x)
       }
       interface Kart { x: number; y: number; vx: number; vy: number; a: number; idx: number; lap: number; color: string; ai: boolean; skill: number; lane: number; boost: number; drift: number; charge: number; steer: number; off: boolean; fin: number }
+      interface Pl { kt: Kart; lapsDone: number; lapT: number; bestLap: number; zoom: number; place: number; score: number }
       const mk = (slot: number, ai: boolean, color: string): Kart => {
         const row = Math.floor(slot / 2)
         const i0 = -3 - row * 3
@@ -602,9 +607,9 @@ const engine: Engine = {
         const side = slot % 2 ? 1 : -1
         return { x: p.x - Math.sin(a) * side * 26, y: p.y + Math.cos(a) * side * 26, vx: 0, vy: 0, a, idx: (i0 + n) % n, lap: row ? 0 : 0, color, ai, skill: ai ? byDiff(env, 0.72, 0.8, 0.88) + rng.range(-0.05, 0.1) : 1, lane: rng.range(-0.45, 0.45), boost: 0, drift: 0, charge: 0, steer: 0, off: false, fin: 0 }
       }
-      const karts: Kart[] = [mk(nRivals, false, t.accent), ...Array.from({ length: nRivals }, (_, i) => mk(i, true, rivalColors[i % rivalColors.length]))]
+      const karts: Kart[] = [mk(nRivals, false, t.accent), ...(two ? [mk(nRivals + 1, false, t.accent2)] : []), ...Array.from({ length: nRivals }, (_, i) => mk(i, true, rivalColors[i % rivalColors.length]))]
       for (const kk of karts) kk.lap = kk.idx > n / 2 ? -1 : 0
-      const me = karts[0]
+      const pls: Pl[] = karts.slice(0, nH).map((kt) => ({ kt, lapsDone: 0, lapT: 0, bestLap: 1e9, zoom: 1, place: karts.length, score: 0 }))
       // pickups and boost pads
       const pickups = Array.from({ length: 24 }, (_, i) => {
         const idx = Math.floor((i / 24) * n)
@@ -615,14 +620,22 @@ const engine: Engine = {
       })
       const pads = Array.from({ length: 6 }, (_, i) => ({ idx: Math.floor(((i + 0.5) / 6) * n) + 4 }))
       const totalProg = (kk: Kart) => kk.lap * n + kk.idx
-      let place = nRivals + 1
-      let lapT = 0
-      let bestLap = 1e9
       let banner = ''
       let bannerT = 0
       let finishT = 0
-      let zoom = 1
+      let winner = 0
+      // ghost: the fastest lap so far is replayed as a translucent kart (Ghost Lap, Ghost Race Daily)
+      const ghostOn = !two && /ghost/.test(blurb)
+      let rec: number[] = []
+      let bestRec: number[] = []
+      let recT = 0
       const sampleBg = Array.from({ length: 60 }, () => ({ x: rng.range(-1800, 1800), y: rng.range(-1400, 1400), e: rng.pick(t.items), s: rng.range(18, 34) }))
+      // viewports: side by side on wide screens, stacked on portrait
+      const views = two
+        ? narrow
+          ? [{ x: 0, y: 0, w: W, h: H / 2 }, { x: 0, y: H / 2, w: W, h: H / 2 }]
+          : [{ x: 0, y: 0, w: W / 2, h: H }, { x: W / 2, y: 0, w: W / 2, h: H }]
+        : [{ x: 0, y: 0, w: W, h: H }]
 
       const nearest = (kk: Kart) => {
         let best = kk.idx
@@ -709,12 +722,34 @@ const engine: Engine = {
           if (Math.ceil(countdown) !== prev) env.sfx(countdown <= 0 ? 'power' : 'click')
           return
         }
-        lapT += dt
-        const gas = k.down('up') || auto
-        const steer = (k.down('right') ? 1 : 0) - (k.down('left') ? 1 : 0) + (ptr.down && !auto ? clamp((ptr.x - W / 2) / (W / 4), -1, 1) : 0)
-        stepKart(me, dt, finishT > 0 ? 0 : gas ? 1 : 0, finishT > 0 ? 0 : clamp(steer, -1, 1), k.down('down'), k.down('b') || k.down('a'))
-        if (me.drift > 0.1 && Math.random() < 0.8) fx.burst(me.x - Math.cos(me.a) * 14, me.y - Math.sin(me.a) * 14, me.charge > 0.8 ? '#fb923c' : t.fg, 1, 60, 3)
-        if (me.boost > 0) fx.burst(me.x - Math.cos(me.a) * 16, me.y - Math.sin(me.a) * 16, '#fde047', 1, 80, 4)
+        for (const [i, pl] of pls.entries()) {
+          const me = pl.kt
+          pl.lapT += dt
+          if (ghostOn && i === 0 && me.fin === 0) {
+            recT += dt
+            if (recT >= 0.05) {
+              recT = 0
+              rec.push(me.x, me.y, me.a)
+            }
+          }
+          let gas: boolean, steer: number, brake: boolean, drift: boolean
+          if (i === 0) {
+            gas = k.down('up') || auto
+            steer = (k.down('right') ? 1 : 0) - (k.down('left') ? 1 : 0) + (ptr.down && !auto && !two ? clamp((ptr.x - W / 2) / (W / 4), -1, 1) : 0)
+            brake = k.down('down')
+            // in 2P Enter/K are shared with player 2, so player 1 drifts only on Shift/Space (or the touch button)
+            drift = two ? k.down('ShiftLeft') || k.down('Space') || (auto && (k.down('b') || k.down('a'))) : k.down('b') || k.down('a')
+          } else {
+            gas = k.down('p2up')
+            steer = (k.down('p2right') ? 1 : 0) - (k.down('p2left') ? 1 : 0)
+            brake = k.down('p2down')
+            drift = k.down('Enter') || k.down('ShiftRight') || k.down('Slash')
+          }
+          const live = me.fin === 0
+          stepKart(me, dt, live && gas ? 1 : 0, live ? clamp(steer, -1, 1) : 0, brake, live && drift)
+          if (me.drift > 0.1 && Math.random() < 0.8) fx.burst(me.x - Math.cos(me.a) * 14, me.y - Math.sin(me.a) * 14, me.charge > 0.8 ? '#fb923c' : t.fg, 1, 60, 3)
+          if (me.boost > 0) fx.burst(me.x - Math.cos(me.a) * 16, me.y - Math.sin(me.a) * 16, '#fde047', 1, 80, 4)
+        }
         for (const kk of karts) {
           if (!kk.ai) continue
           const look = 5 + Math.round(Math.hypot(kk.vx, kk.vy) / 45)
@@ -755,11 +790,11 @@ const engine: Engine = {
                 a.vy += ny * imp
                 b.vx -= nx * imp
                 b.vy -= ny * imp
-                if (i === 0) {
+                if (i < nH) {
                   shake.kick(4)
                   env.sfx('hit')
                   fx.burst((a.x + b.x) / 2, (a.y + b.y) / 2, t.fg, 8, 160, 3)
-                  if (ram) score += 40
+                  if (ram) pls[i].score += 40
                 }
               }
             }
@@ -770,34 +805,50 @@ const engine: Engine = {
             p.got -= dt
             continue
           }
-          if (Math.hypot(p.x - me.x, p.y - me.y) < 26) {
-            p.got = 12
-            score += 50
-            me.boost = Math.max(me.boost, 0.5)
-            env.sfx('point')
-            fx.burst(p.x, p.y, t.accent2, 10, 160, 3)
+          for (const pl of pls) {
+            if (Math.hypot(p.x - pl.kt.x, p.y - pl.kt.y) < 26) {
+              p.got = 12
+              pl.score += 50
+              pl.kt.boost = Math.max(pl.kt.boost, 0.5)
+              env.sfx('point')
+              fx.burst(p.x, p.y, t.accent2, 10, 160, 3)
+              break
+            }
           }
         }
         // laps / finish
-        place = 1 + karts.filter((kk) => kk.ai && (kk.fin ? kk.fin > 0 && me.fin === 0 : totalProg(kk) > totalProg(me))).length
-        if (me.lap >= 1 && me.lap * n + 0 > 0) {
-          const doneLaps = me.lap
-          if (doneLaps > lapsDone) {
-            const lt = lapT
-            lapsDone = doneLaps
-            bestLap = Math.min(bestLap, lt)
-            lapT = 0
+        for (const pl of pls) {
+          const me = pl.kt
+          pl.place = 1 + karts.filter((o) => o !== me && (o.fin ? me.fin === 0 || o.fin < me.fin : me.fin === 0 && totalProg(o) > totalProg(me))).length
+        }
+        for (const [i, pl] of pls.entries()) {
+          const me = pl.kt
+          if (me.lap >= 1 && me.lap > pl.lapsDone) {
+            const doneLaps = me.lap
+            const lt = pl.lapT
+            pl.lapsDone = doneLaps
+            if (ghostOn && i === 0 && lt < pl.bestLap) bestRec = rec
+            if (i === 0) {
+              rec = []
+              recT = 0
+            }
+            pl.bestLap = Math.min(pl.bestLap, lt)
+            pl.lapT = 0
+            const who = two ? `P${i + 1} ` : ''
             if (doneLaps >= laps) {
-              me.fin = 1
-              finishT = 2.4
-              banner = 'FINISH!'
+              me.fin = time
+              if (finishT <= 0) {
+                finishT = 2.4
+                winner = i
+              }
+              banner = `${who}FINISH!`
               bannerT = 3
               env.sfx('win')
             } else {
-              banner = `LAP ${doneLaps + 1}/${laps}  ${lt.toFixed(1)}s`
+              banner = `${who}LAP ${doneLaps + 1}/${laps}  ${lt.toFixed(1)}s`
               bannerT = 2
               env.sfx('power')
-              score += 200
+              pl.score += 200
             }
           }
         }
@@ -805,18 +856,26 @@ const engine: Engine = {
         if (finishT > 0) {
           finishT -= dt
           if (finishT <= 0) {
-            const won = place <= byDiff(env, 4, 3, 3)
-            score += (nRivals + 1 - place) * 300 + Math.max(0, Math.round(300 - bestLap * 3))
-            finish(won, `Finished ${ord(place)} of ${nRivals + 1}, best lap ${bestLap.toFixed(1)}s`)
+            const w = pls[winner]
+            if (two) {
+              w.score += 500 + Math.max(0, Math.round(300 - w.bestLap * 3))
+              score = w.score
+              finish(true, `Player ${winner + 1} wins! Best lap ${w.bestLap.toFixed(1)}s`)
+            } else {
+              const won = w.place <= byDiff(env, 4, 3, 3)
+              w.score += (nRivals + 1 - w.place) * 300 + Math.max(0, Math.round(300 - w.bestLap * 3))
+              score = w.score
+              finish(won, `Finished ${ord(w.place)} of ${nRivals + 1}, best lap ${w.bestLap.toFixed(1)}s`)
+            }
           }
         }
-        score += Math.hypot(me.vx, me.vy) * dt * 0.05
+        for (const pl of pls) pl.score += Math.hypot(pl.kt.vx, pl.kt.vy) * dt * 0.05
+        score = Math.max(...pls.map((p) => p.score))
         env.score(Math.round(score))
-        env.status(`Lap ${Math.min(lapsDone + 1, laps)}/${laps} · ${ord(place)}/${nRivals + 1}`)
+        env.status(two ? pls.map((p, i) => `P${i + 1} lap ${Math.min(p.lapsDone + 1, laps)}/${laps}`).join(' · ') : `Lap ${Math.min(pls[0].lapsDone + 1, laps)}/${laps} · ${ord(pls[0].place)}/${nRivals + 1}`)
       }
-      let lapsDone = 0
 
-      const kartShape = (kk: Kart, hero: boolean) => {
+      const kartShape = (kk: Kart) => {
         ctx.save()
         ctx.translate(kk.x, kk.y)
         ctx.rotate(kk.a)
@@ -838,8 +897,11 @@ const engine: Engine = {
         ctx.roundRect(1, -5, 9, 10, 3)
         ctx.fill()
         ctx.restore()
-        if (hero) emoji(ctx, t.hero, kk.x, kk.y - 2, 20)
-        else emoji(ctx, t.foes[Math.abs(Math.round(kk.lane * 100)) % t.foes.length], kk.x, kk.y - 2, 16)
+        const hi = karts.indexOf(kk)
+        if (!kk.ai) {
+          emoji(ctx, hi === 0 ? t.hero : t.foes[0], kk.x, kk.y - 2, 20)
+          if (two) text(ctx, `P${hi + 1}`, kk.x, kk.y - 24, { size: 10, color: kk.color, shadow: '#000' })
+        } else emoji(ctx, t.foes[Math.abs(Math.round(kk.lane * 100)) % t.foes.length], kk.x, kk.y - 2, 16)
       }
 
       const strokeTrack = (w: number, style: string, dash: number[] = []) => {
@@ -854,15 +916,21 @@ const engine: Engine = {
         ctx.setLineDash([])
       }
 
-      const draw = () => {
+      const drawView = (pl: Pl, vx: number, vy: number, vw: number, vh: number) => {
+        const me = pl.kt
+        const vs = two ? vh / 450 : 1
         ctx.save()
-        shake.apply(ctx)
+        ctx.beginPath()
+        ctx.rect(vx, vy, vw, vh)
+        ctx.clip()
         const sp = Math.hypot(me.vx, me.vy)
-        zoom += ((narrow ? 0.62 : 0.88) - sp * 0.0004 - zoom) * 0.05
+        const base = two ? Math.min(vw, vh * 1.2) / 560 : narrow ? 0.62 : 0.88
+        pl.zoom += (base - sp * 0.0004 - pl.zoom) * 0.05
         ctx.fillStyle = mix(t.bg2, t.good, 0.45)
-        ctx.fillRect(0, 0, W, H)
-        ctx.translate(W / 2, H / 2)
-        ctx.scale(zoom, zoom)
+        ctx.fillRect(vx, vy, vw, vh)
+        ctx.save()
+        ctx.translate(vx + vw / 2, vy + vh / 2)
+        ctx.scale(pl.zoom, pl.zoom)
         ctx.translate(-me.x, -me.y)
         ctx.globalAlpha = 0.5
         for (const d of sampleBg) emoji(ctx, d.e, d.x, d.y, d.s)
@@ -914,26 +982,32 @@ const engine: Engine = {
           ctx.shadowBlur = 0
         }
         fx.draw(ctx)
-        for (const kk of karts.slice(1)) kartShape(kk, false)
+        if (ghostOn && bestRec.length) {
+          const gi = Math.min(Math.floor(pls[0].lapT / 0.05), bestRec.length / 3 - 1) * 3
+          ctx.globalAlpha = 0.4
+          kartShape({ ...pls[0].kt, x: bestRec[gi], y: bestRec[gi + 1], a: bestRec[gi + 2], color: '#e5e7eb', ai: true })
+          ctx.globalAlpha = 1
+        }
+        for (const kk of karts) if (kk !== me) kartShape(kk)
         if (me.boost > 0) {
           ctx.shadowColor = '#fde047'
           ctx.shadowBlur = 20
         }
-        kartShape(me, true)
+        kartShape(me)
         ctx.shadowBlur = 0
         ctx.restore()
         if (dark) {
-          const g = ctx.createRadialGradient(W / 2, H / 2, 60, W / 2, H / 2, 300)
+          const g = ctx.createRadialGradient(vx + vw / 2, vy + vh / 2, 60 * vs, vx + vw / 2, vy + vh / 2, 300 * vs)
           g.addColorStop(0, 'rgba(0,0,0,0)')
           g.addColorStop(1, 'rgba(0,0,0,.9)')
           ctx.fillStyle = g
-          ctx.fillRect(0, 0, W, H)
+          ctx.fillRect(vx, vy, vw, vh)
         }
         // minimap
         const ms = 0.045
         ctx.save()
-        const mmS = narrow ? 0.62 : 1
-        ctx.translate(W - 8 - 58 * mmS, 8 + 58 * mmS)
+        const mmS = two ? 0.5 : narrow ? 0.62 : 1
+        ctx.translate(vx + vw - 8 - 58 * mmS, vy + 8 + 58 * mmS)
         ctx.scale(mmS, mmS)
         ctx.fillStyle = 'rgba(0,0,0,.4)'
         ctx.beginPath()
@@ -955,15 +1029,29 @@ const engine: Engine = {
         }
         ctx.restore()
         const kmh = Math.round(sp * 0.9)
-        text(ctx, `${kmh}`, W - 14, H - 54, { size: narrow ? 20 : 26, color: me.boost > 0 ? '#fde047' : t.fg, align: 'right', shadow: '#000' })
-        text(ctx, 'KM/H', W - 14, H - 30, { size: 9, color: t.fg, align: 'right' })
-        text(ctx, `${ord(place)}`, 14, 24, { size: narrow ? 14 : 20, color: t.accent2, align: 'left', shadow: '#000' })
-        text(ctx, `LAP ${Math.min(lapsDone + 1, laps)}/${laps}  ${lapT.toFixed(1)}s`, 14, 50, { size: 10, color: t.fg, align: 'left' })
+        text(ctx, `${kmh}`, vx + vw - 14, vy + vh - 54 * vs, { size: narrow || two ? 18 : 26, color: me.boost > 0 ? '#fde047' : t.fg, align: 'right', shadow: '#000' })
+        text(ctx, 'KM/H', vx + vw - 14, vy + vh - 30 * vs, { size: 9, color: t.fg, align: 'right' })
+        const pi = pls.indexOf(pl)
+        text(ctx, `${two ? `P${pi + 1} ` : ''}${ord(pl.place)}`, vx + 14, vy + 24, { size: narrow || two ? 14 : 20, color: two ? me.color : t.accent2, align: 'left', shadow: '#000' })
+        text(ctx, `LAP ${Math.min(pl.lapsDone + 1, laps)}/${laps}  ${pl.lapT.toFixed(1)}s`, vx + 14, vy + 50 * (two ? 0.8 : 1), { size: 10, color: t.fg, align: 'left' })
         if (me.charge > 0) {
           ctx.fillStyle = 'rgba(0,0,0,.5)'
-          ctx.fillRect(W / 2 - 40, H - 40, 80, 8)
+          ctx.fillRect(vx + vw / 2 - 40, vy + vh - 40 * vs, 80, 8)
           ctx.fillStyle = me.charge > 0.8 ? '#fb923c' : t.fg
-          ctx.fillRect(W / 2 - 40, H - 40, 80 * Math.min(1, me.charge / 2), 8)
+          ctx.fillRect(vx + vw / 2 - 40, vy + vh - 40 * vs, 80 * Math.min(1, me.charge / 2), 8)
+        }
+        ctx.restore()
+      }
+
+      const draw = () => {
+        ctx.save()
+        shake.apply(ctx)
+        for (const [i, pl] of pls.entries()) drawView(pl, views[i].x, views[i].y, views[i].w, views[i].h)
+        ctx.restore()
+        if (two) {
+          ctx.fillStyle = '#000'
+          if (narrow) ctx.fillRect(0, H / 2 - 2, W, 4)
+          else ctx.fillRect(W / 2 - 2, 0, 4, H)
         }
         if (bannerT > 0) text(ctx, banner, W / 2, 90, { size: narrow ? 14 : 20, color: t.accent2, shadow: t.accent })
         if (countdown > 0) {
@@ -972,14 +1060,202 @@ const engine: Engine = {
         }
         if (hint > 0 && countdown <= 0.5) {
           ctx.globalAlpha = Math.min(1, hint)
-          text(ctx, auto ? (narrow ? 'HOLD 🌀 TO DRIFT' : '◀ ▶ STEER · HOLD 🌀 TO DRIFT, RELEASE FOR TURBO') : '←/→ STEER · ↑ GAS · ↓ BRAKE · SHIFT DRIFT', W / 2, H - 70, { size: narrow ? 8 : 11, color: t.fg, shadow: '#000' })
+          if (two) {
+            text(ctx, narrow ? 'P1 WASD+SPACE · P2 ARROWS+ENTER' : 'P1: WASD + SPACE DRIFT    P2: ARROWS + ENTER DRIFT', W / 2, H - 12, { size: narrow ? 8 : 11, color: t.fg, shadow: '#000' })
+          } else text(ctx, auto ? (narrow ? 'HOLD 🌀 TO DRIFT' : '◀ ▶ STEER · HOLD 🌀 TO DRIFT, RELEASE FOR TURBO') : '←/→ STEER · ↑ GAS · ↓ BRAKE · SHIFT DRIFT', W / 2, H - 70, { size: narrow ? 8 : 11, color: t.fg, shadow: '#000' })
           ctx.globalAlpha = 1
         }
       }
       return { update, draw }
     }
 
-    const mode = topdown ? top() : road()
+    // ======================================================== side-view sprint (alternate-key mash race: swim / sprint / noodles / tandem)
+    const sprint = () => {
+      const heats = 3
+      const total = 100
+      const swim = mods.has('swim') || /swim|pool|water/.test(blurb)
+      const nL = 4
+      interface Run { x: number; v: number; stam: number; last: string; human: number; skill: number; phase: number; fin: number; e: string; name: string; tired: number }
+      let heat = 0
+      let heatT = 0
+      let results: string[] = []
+      let wins = [0, 0]
+      let podium = 0
+      let pause = 0
+      const runs: Run[] = []
+      const setup = () => {
+        runs.length = 0
+        for (let i = 0; i < nL; i++) {
+          const human = i === 0 ? 1 : i === 1 && two ? 2 : 0
+          runs.push({ x: 0, v: 0, stam: 1, last: '', human, skill: byDiff(env, 0.74, 0.86, 0.98) + heat * 0.05 + rng.range(-0.05, 0.07), phase: rng.range(0, 6), fin: 0, e: human === 1 ? t.hero : human === 2 ? t.foes[0] : t.foes[i % t.foes.length], name: human ? `P${human}` : '', tired: 0 })
+        }
+        heatT = 0
+        countdown = 2.6
+      }
+      setup()
+      const press = (r: Run, side: string) => {
+        if (r.fin || countdown > 0) return
+        if (side === r.last) {
+          r.v += 0.12
+        } else {
+          r.v += (r.stam > 0.02 ? 0.95 : 0.35) * (1 + (heat === 0 ? 0.05 : 0))
+          r.stam = Math.max(0, r.stam - 0.03)
+          if (r.human === 1) env.sfx('click')
+        }
+        r.last = side
+      }
+      bag.on(st.canvas, 'pointerdown', (e) => {
+        if (e.button === 2) return
+        press(runs[0], st.toLocal(e).x < W / 2 ? 'left' : 'right')
+      })
+      const laneTop = 78
+      const laneH = (H - laneTop - 46) / nL
+      const xs = (m: number) => 60 + (m / total) * (W - 130)
+      const update = (dt: number) => {
+        time += dt
+        hint = Math.max(0, hint - dt)
+        fx.update(dt, 0)
+        shake.update(dt)
+        if (over) return
+        if (pause > 0) {
+          pause -= dt
+          if (pause <= 0) {
+            heat++
+            setup()
+          }
+          return
+        }
+        if (countdown > 0) {
+          const prev = Math.ceil(countdown)
+          countdown -= dt
+          if (Math.ceil(countdown) !== prev) env.sfx(countdown <= 0 ? 'power' : 'click')
+          return
+        }
+        heatT += dt
+        for (const r of runs) {
+          if (r.human === 1) {
+            if (k.hit('left')) press(r, 'left')
+            if (k.hit('right')) press(r, 'right')
+          } else if (r.human === 2) {
+            if (k.hit('p2left')) press(r, 'left')
+            if (k.hit('p2right')) press(r, 'right')
+          } else if (!r.fin) {
+            const target = r.skill * 9.4 * (1 + 0.14 * Math.sin(time * 2.4 + r.phase))
+            r.v += (target - r.v) * Math.min(1, dt * 2)
+          }
+          if (r.human) {
+            r.v *= Math.exp(-0.5 * dt)
+            r.stam = Math.min(1, r.stam + 0.06 * dt)
+            r.tired = r.stam < 0.05 ? 1 : 0
+            r.v = Math.min(r.v, r.tired ? 6 : 12.5)
+          }
+          if (r.fin) r.v *= Math.exp(-2 * dt)
+          r.x += r.v * dt
+          if (!r.fin && r.x >= total) {
+            r.fin = heatT
+            if (r.human === 1) env.sfx('win')
+          }
+          if (r.human === 1 && r.v > 8 && Math.random() < 0.5) fx.burst(xs(r.x), laneTop + laneH * 0.7, swim ? '#bde0ff' : t.fg, 1, 60, 3)
+        }
+        if (runs.filter((r) => r.human).every((r) => r.fin)) {
+          const order = [...runs].sort((a, b) => (a.fin || 999) - (b.fin || 999) || b.x - a.x)
+          const winner = order[0]
+          if (two) {
+            wins[winner.human ? winner.human - 1 : 0] += winner.human ? 1 : 0
+            results.push(winner.human ? `P${winner.human}` : 'AI')
+            score += winner.human ? 200 : 0
+          } else {
+            const place = order.indexOf(runs[0]) + 1
+            if (place <= 2) podium++
+            score += (nL - place + 1) * 100 + Math.max(0, Math.round(300 - runs[0].fin * 20))
+            results.push(ord(place))
+          }
+          banner = two ? `HEAT ${heat + 1}: ${results[heat]} WINS` : `HEAT ${heat + 1}: ${results[heat]}`
+          bannerT = 2
+          if (heat + 1 >= heats || (two && (wins[0] >= 2 || wins[1] >= 2))) {
+            over = true
+            env.sfx('win')
+            env.score(Math.round(score))
+            setTimeout(() => env.end({ score: Math.round(score), won: two ? true : podium >= 2, text: two ? `Player ${wins[0] > wins[1] ? 1 : 2} wins ${Math.max(...wins)}-${Math.min(...wins)}` : `Heats: ${results.join(', ')}` }), 1600)
+          } else pause = 2
+        }
+        env.score(Math.round(score))
+        env.status(`Heat ${Math.min(heat + 1, heats)}/${heats}${two ? ` · ${wins[0]}-${wins[1]}` : ''}`)
+      }
+      let banner = ''
+      let bannerT = 0
+      const draw = () => {
+        bannerT = Math.max(0, bannerT - 1 / 60)
+        ctx.save()
+        shake.apply(ctx)
+        ctx.fillStyle = swim ? mix(t.bg2, '#2563eb', 0.7) : mix(t.bg2, t.good, 0.35)
+        ctx.fillRect(0, 0, W, H)
+        for (let i = 0; i < nL; i++) {
+          const y = laneTop + i * laneH
+          ctx.fillStyle = swim ? (i % 2 ? '#3b82f6' : '#2f74e6') : i % 2 ? '#4a4a56' : '#42424d'
+          ctx.fillRect(40, y, W - 80, laneH - 3)
+          ctx.strokeStyle = swim ? 'rgba(255,255,255,.35)' : 'rgba(255,255,255,.18)'
+          ctx.lineWidth = 2
+          ctx.setLineDash([14, 14])
+          ctx.lineDashOffset = -(time * (runs[0]?.v ?? 0) * 12)
+          ctx.beginPath()
+          ctx.moveTo(40, y + laneH - 1.5)
+          ctx.lineTo(W - 40, y + laneH - 1.5)
+          ctx.stroke()
+          ctx.setLineDash([])
+          if (swim) {
+            ctx.strokeStyle = 'rgba(255,255,255,.18)'
+            ctx.beginPath()
+            for (let x = 40; x < W - 40; x += 8) ctx.lineTo(x, y + laneH * 0.5 + Math.sin(x * 0.07 + time * 3 + i) * 4)
+            ctx.stroke()
+          }
+        }
+        // finish line
+        const fx0 = xs(total) + 14
+        for (let r = 0; r < nL * 4; r++) for (let c = 0; c < 2; c++) {
+          ctx.fillStyle = (r + c) % 2 ? '#111' : '#f5f5f5'
+          ctx.fillRect(fx0 + c * 7, laneTop + (r * laneH * nL) / (nL * 4), 7, (laneH * nL) / (nL * 4))
+        }
+        for (const [i, r] of runs.entries()) {
+          const y = laneTop + i * laneH + laneH * 0.5
+          const bob = Math.sin(time * (6 + r.v) + i) * Math.min(5, r.v * 0.5)
+          if (swim) {
+            ctx.fillStyle = 'rgba(255,255,255,.35)'
+            ctx.beginPath()
+            ctx.ellipse(xs(r.x) - 12, y + 12, 18 + r.v, 5, 0, 0, Math.PI * 2)
+            ctx.fill()
+          }
+          emoji(ctx, r.e, xs(r.x), y + bob, Math.min(laneH * 0.9, 46))
+          if (r.name) text(ctx, r.name, xs(r.x), y - laneH * 0.5 + 6, { size: 9, color: r.human === 2 ? t.accent2 : t.accent, shadow: '#000' })
+        }
+        fx.draw(ctx)
+        ctx.restore()
+        text(ctx, `HEAT ${Math.min(heat + 1, heats)}/${heats}`, W / 2, 24, { size: narrow ? 14 : 20, color: t.fg, shadow: '#000' })
+        text(ctx, `${Math.round(Math.min(total, runs[0]?.x ?? 0))} / ${total} m`, W / 2, 50, { size: 11, color: t.accent2 })
+        const bars = two ? runs.filter((r) => r.human) : [runs[0]]
+        for (const [bi, r] of bars.entries()) {
+          const bx = bi ? W - 170 : 14
+          ctx.fillStyle = 'rgba(0,0,0,.5)'
+          ctx.fillRect(bx, H - 30, 150, 10)
+          ctx.fillStyle = r.stam > 0.25 ? t.good : t.danger
+          ctx.fillRect(bx, H - 30, 150 * r.stam, 10)
+          text(ctx, r.tired ? 'TIRED!' : `${two ? `P${r.human} ` : ''}STAMINA`, bx, H - 38, { size: 8, color: t.fg, align: 'left' })
+        }
+        if (bannerT > 0) text(ctx, banner, W / 2, H * 0.5, { size: narrow ? 14 : 22, color: t.accent2, shadow: t.accent })
+        if (countdown > 0) {
+          const c = Math.ceil(countdown - 0.2)
+          text(ctx, c > 0 ? `${c}` : 'GO!', W / 2, H * 0.4, { size: 64, color: c > 0 ? t.fg : t.good, shadow: t.accent })
+        }
+        if (hint > 0 && countdown <= 0.5) {
+          ctx.globalAlpha = Math.min(1, hint)
+          text(ctx, two ? 'P1: A / D ALTERNATELY   P2: ← / → ALTERNATELY' : auto ? 'TAP LEFT / RIGHT ALTERNATELY' : 'ALTERNATE ← / → (OR A / D) AS FAST AS YOU CAN', W / 2, H * 0.62, { size: narrow ? 8 : 11, color: t.fg, shadow: '#000' })
+          ctx.globalAlpha = 1
+        }
+      }
+      return { update, draw }
+    }
+
+    const mode = sprintMode ? sprint() : topdown ? top() : road()
     const lp = loop(mode.update, mode.draw)
     return {
       pause: (p) => lp.pause(p),
