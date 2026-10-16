@@ -1,8 +1,6 @@
 // Snake: grid snake with themed food, golden bonus fruit, obstacles, portals, wrap, darkness and 2-player mode.
-import { background, Bag, byDiff, createStage, emoji, keys, loop, Particles, roundRect, swipe, text, type Engine } from '../kit'
+import { background, Bag, byDiff, createStage, emoji, keys, loop, Particles, roundRect, swipe, text, vpad, type Engine } from '../kit'
 
-const COLS = 32
-const ROWS = 18
 const CELL = 20
 
 type P = { x: number; y: number }
@@ -11,6 +9,11 @@ interface Snake { body: P[]; dir: P; next: P[]; alive: boolean; color: string; g
 const engine: Engine = {
   start(env) {
     const { theme: t, rng, mods } = env
+    // Landscape board on wide screens, portrait board on phones.
+    const r = env.host.getBoundingClientRect()
+    const portrait = r.height > r.width * 0.9
+    const COLS = portrait ? 18 : 32
+    const ROWS = portrait ? 26 : 18
     const st = createStage(env.host, COLS * CELL, ROWS * CELL)
     const ctx = st.ctx
     const k = keys({ twoPlayer: env.players === 2 })
@@ -27,7 +30,7 @@ const engine: Engine = {
     // Obstacles: symmetric blocks so the board feels designed rather than random.
     const nWalls = byDiff(env, 0, 4, 8) + (mods.has('hard') ? 4 : 0)
     for (let i = 0; i < nWalls; i++) {
-      const x = rng.int(3, COLS / 2 - 3)
+      const x = rng.int(3, Math.floor(COLS / 2) - 2)
       const y = rng.int(2, ROWS - 3)
       const len = rng.int(2, 4)
       const vert = rng.chance(0.5)
@@ -39,12 +42,12 @@ const engine: Engine = {
         }
       }
     }
-    const portalPair: [P, P] | null = portals ? [{ x: 4, y: 3 }, { x: COLS - 5, y: ROWS - 4 }] : null
+    const portalPair: [P, P] | null = portals ? [{ x: 3, y: 3 }, { x: COLS - 4, y: ROWS - 4 }] : null
 
     const mk = (x: number, y: number, dx: number, color: string): Snake => ({
       body: [{ x, y }, { x: x - dx, y }, { x: x - 2 * dx, y }], dir: { x: dx, y: 0 }, next: [], alive: true, color, grow: 0, score: 0,
     })
-    const snakes: Snake[] = two ? [mk(6, 5, 1, t.accent), mk(COLS - 7, ROWS - 6, -1, t.accent2)] : [mk(8, Math.floor(ROWS / 2), 1, t.accent)]
+    const snakes: Snake[] = two ? [mk(6, 5, 1, t.accent), mk(COLS - 7, ROWS - 6, -1, t.accent2)] : [mk(5, Math.floor(ROWS / 2), 1, t.accent)]
 
     const occupied = (p: P) => walls.has(key(p)) || snakes.some((s) => s.body.some((b) => b.x === p.x && b.y === p.y))
     const freeCell = (): P => {
@@ -61,8 +64,11 @@ const engine: Engine = {
     let acc = 0
     let time = 0
     let over = false
+    // The snake waits for the first direction input, so nobody crashes while reading.
+    let started = false
 
     const turn = (s: Snake, d: P) => {
+      started = true
       const last = s.next.length ? s.next[s.next.length - 1] : s.dir
       if (last.x + d.x === 0 && last.y + d.y === 0) return
       if (last.x === d.x && last.y === d.y) return
@@ -70,6 +76,7 @@ const engine: Engine = {
     }
     const D = { left: { x: -1, y: 0 }, right: { x: 1, y: 0 }, up: { x: 0, y: -1 }, down: { x: 0, y: 1 } }
     bag.add(swipe(st.canvas, (d) => turn(snakes[0], D[d])))
+    if (!two) bag.add(vpad(env.host, k, 'dpad'))
 
     const hud = () => {
       env.score(two ? Math.max(...snakes.map((s) => s.score)) : snakes[0].score)
@@ -153,6 +160,7 @@ const engine: Engine = {
         gold.ttl -= dt
         if (gold.ttl <= 0) gold = null
       }
+      if (!started) return
       acc += dt
       while (acc >= step) {
         acc -= step
@@ -247,7 +255,12 @@ const engine: Engine = {
         ctx.fillStyle = g
         ctx.fillRect(0, 0, st.w, st.h)
       }
-      if (time < 2.2 && !over) text(ctx, two ? 'P1: WASD   P2: ARROWS' : 'ARROWS / WASD / SWIPE', st.w / 2, st.h - 24, { size: 12, color: t.fg })
+      if (!started && !over) {
+        ctx.fillStyle = 'rgba(0,0,0,.45)'
+        ctx.fillRect(0, st.h / 2 - 34, st.w, 68)
+        text(ctx, 'PRESS A DIRECTION', st.w / 2, st.h / 2 - 10, { size: 14, color: t.accent, shadow: t.accent })
+        text(ctx, two ? 'P1: WASD   P2: ARROWS' : 'ARROWS / WASD / SWIPE', st.w / 2, st.h / 2 + 14, { size: 9, color: t.fg })
+      }
     }
 
     const lp = loop(update, draw)

@@ -132,8 +132,11 @@ export function createStage(host: HTMLElement, w: number, h: number): Stage {
   const ctx = canvas.getContext('2d')!
   let scale = 1
   const fit = () => {
-    const r = host.getBoundingClientRect()
-    scale = Math.max(0.1, Math.min(r.width / w, r.height / h))
+    // Content box: an on-screen gamepad reserves space via padding-bottom on the host.
+    const cs = getComputedStyle(host)
+    const cw = host.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+    const ch = host.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)
+    scale = Math.max(0.1, Math.min(cw / w, ch / h))
     const dpr = Math.min(window.devicePixelRatio || 1, 2)
     canvas.style.width = `${Math.floor(w * scale)}px`
     canvas.style.height = `${Math.floor(h * scale)}px`
@@ -379,7 +382,8 @@ export function swipe(el: HTMLElement, fn: (dir: 'left' | 'right' | 'up' | 'down
   }
 }
 
-export const isTouch = () => typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches
+export const isTouch = () =>
+  typeof matchMedia !== 'undefined' && (matchMedia('(pointer: coarse)').matches || (navigator.maxTouchPoints > 0 && innerWidth < 900))
 
 /**
  * On-screen gamepad for touch devices (no-op on desktop unless force=true).
@@ -417,7 +421,13 @@ export function vpad(host: HTMLElement, k: Keys, layout: 'dpad' | 'lr' | 'none',
   for (const b of buttons) right.appendChild(mk(b.action, b.label, 'act'))
   el.append(left, right)
   host.appendChild(el)
-  return () => el.remove()
+  // Reserve a strip under the playfield so the pad never covers the game.
+  const prevPad = host.style.paddingBottom
+  host.style.paddingBottom = layout === 'none' && buttons.length === 0 ? prevPad : '138px'
+  return () => {
+    el.remove()
+    host.style.paddingBottom = prevPad
+  }
 }
 
 // ---------- drawing ----------

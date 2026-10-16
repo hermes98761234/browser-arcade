@@ -26,7 +26,8 @@ try {
   }
   const send = (method, params = {}) => new Promise((r) => { pending.set(++id, r); ws.send(JSON.stringify({ id, method, params })) })
   await send('Runtime.enable')
-  await send('Emulation.setDeviceMetricsOverride', { width: +w, height: +h, deviceScaleFactor: 1, mobile: +w < 600 })
+  await send('Emulation.setDeviceMetricsOverride', { width: +w, height: +h, deviceScaleFactor: +w < 600 ? 2 : 1, mobile: +w < 600 })
+  if (+w < 600) await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 })
   if (dark) await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] })
   await send('Page.navigate', { url })
   let done = false

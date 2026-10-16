@@ -48,7 +48,7 @@ export function GameCard({ game, t, compact }: { game: Game; t: T; compact?: boo
           {!compact && <p>{game.desc}</p>}
           <div className="tags">
             <span>{t(GENRES[game.genre])}</span>
-            <span>{t(ENGINES[game.engine].name)}</span>
+            {ENGINES[game.engine].name !== GENRES[game.genre] && <span>{t(ENGINES[game.engine].name)}</span>}
             {!compact && <span className="year">{game.year < 1970 ? t('classic') : game.year}</span>}
             {best[game.id] ? <span className="best">🏆 {best[game.id]}</span> : null}
           </div>
