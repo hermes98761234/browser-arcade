@@ -37,8 +37,8 @@ const engine: Engine = {
     const touch = isTouch()
     const blurb = `${env.name} ${env.desc}`.toLowerCase()
     const dark = mods.has('dark') || t.id === 'horror' || /horror|dark|flashlight|haunt|asylum|crypt|dread|night|shadow/.test(blurb)
-    const stealth = mods.has('stealth')
-    const needKeys = mods.has('key')
+    const stealth = mods.has('stealth') || /sneak|silent|stealth|heist|infiltrat|assassin|quiet|creak/.test(blurb)
+    const needKeys = mods.has('key') || /asylum|locked|heist|escape/.test(blurb)
     const style: 'maze' | 'dungeon' = /maze|labyrinth|bamboo|netrunner|hedge|spin/.test(blurb) ? 'maze' : /dungeon|crypt|asylum|castle|house|fps|keep|museum|carnival/.test(blurb) ? 'dungeon' : rng.chance(0.5) ? 'maze' : 'dungeon'
     const totalLevels = byDiff(env, 3, 4, 5)
     const dispVpad = vpad(env.host, k, 'dpad', stealth ? [{ action: 'b', label: '🤫' }] : [{ action: 'a', label: '💥' }])
