@@ -4,7 +4,8 @@ import { background, Bag, byDiff, createStage, emoji, keys, loop, Particles, rou
 const CELL = 20
 
 type P = { x: number; y: number }
-interface Snake { body: P[]; dir: P; next: P[]; alive: boolean; color: string; grow: number; score: number }
+interface Snake { body: P[]; dir: P; next: P[]; alive: boolean; color: string; grow: number; score: number; ai: boolean; e: string }
+const WORDS = ['SNAKE', 'APPLE', 'GRAPE', 'LEARN', 'BOOKS', 'MATH', 'CLASS', 'PENCIL', 'SCHOOL', 'LETTER', 'READ', 'WRITE', 'SPELL', 'HOMEWORK', 'ALPHABET']
 
 const engine: Engine = {
   start(env) {
@@ -23,12 +24,18 @@ const engine: Engine = {
     const dark = mods.has('dark')
     const portals = mods.has('portal')
     const two = env.players === 2
-    let step = byDiff(env, 0.13, 0.1, 0.075) * (mods.has('fast') ? 0.8 : 1)
+    const S = `${env.name} ${env.desc}`.toLowerCase()
+    const trail = /tron|light.?cycle|light.?trail|glow worm/.test(S)
+    const word = !trail && /word|letter|spell/.test(S)
+    const inverse = !trail && !word && /inverse|grow smaller|shrink/.test(S)
+    const rivals = !trail && !word && !inverse && !two && (mods.has('versus') || /\bio\b/.test(S))
+    const nAi = trail ? (two ? 1 : byDiff(env, 2, 3, 4)) : rivals ? byDiff(env, 2, 3, 4) : 0
+    let step = byDiff(env, 0.13, 0.1, 0.075) * (mods.has('fast') ? 0.8 : 1) * (trail ? 1.15 : 1)
     const walls = new Set<string>()
     const key = (p: P) => `${p.x},${p.y}`
 
     // Obstacles: symmetric blocks so the board feels designed rather than random.
-    const nWalls = byDiff(env, 0, 4, 8) + (mods.has('hard') ? 4 : 0)
+    const nWalls = trail || inverse ? 0 : byDiff(env, 0, 4, 8) + (mods.has('hard') ? 4 : 0)
     for (let i = 0; i < nWalls; i++) {
       const x = rng.int(3, Math.floor(COLS / 2) - 2)
       const y = rng.int(2, ROWS - 3)
@@ -44,10 +51,34 @@ const engine: Engine = {
     }
     const portalPair: [P, P] | null = portals ? [{ x: 3, y: 3 }, { x: COLS - 4, y: ROWS - 4 }] : null
 
-    const mk = (x: number, y: number, dx: number, color: string): Snake => ({
-      body: [{ x, y }, { x: x - dx, y }, { x: x - 2 * dx, y }], dir: { x: dx, y: 0 }, next: [], alive: true, color, grow: 0, score: 0,
+    const mk = (x: number, y: number, dx: number, color: string, ai = false, e = ''): Snake => ({
+      body: [{ x, y }, { x: x - dx, y }, { x: x - 2 * dx, y }], dir: { x: dx, y: 0 }, next: [], alive: true, color, grow: 0, score: 0, ai, e,
     })
     const snakes: Snake[] = two ? [mk(6, 5, 1, t.accent), mk(COLS - 7, ROWS - 6, -1, t.accent2)] : [mk(5, Math.floor(ROWS / 2), 1, t.accent)]
+    if (nAi) {
+      const cols = [t.accent2, t.danger, t.good, '#facc15']
+      const spots: [number, number, number][] = [[COLS - 6, 4, -1], [COLS - 6, ROWS - 5, -1], [6, 4, 1], [6, ROWS - 5, 1]]
+      for (let i = 0; i < nAi; i++) {
+        const sp = spots[(i + (two ? 2 : 0)) % 4]
+        snakes.push(mk(sp[0], sp[1], sp[2], cols[i % 4], true, t.foes[i % t.foes.length]))
+      }
+    }
+    if (inverse) {
+      // A long snake coiled in a serpentine; eating makes it shorter.
+      const n = portrait ? 22 : 30
+      const rowLen = COLS - 4
+      const cells: P[] = []
+      for (let i = 0; i < n; i++) {
+        const row = Math.floor(i / rowLen)
+        const c = i % rowLen
+        cells.push({ x: row % 2 === 0 ? 2 + c : COLS - 3 - c, y: ROWS - 3 - row })
+      }
+      const s0 = snakes[0]
+      s0.body = cells.reverse()
+      const h = s0.body[0]
+      const nk = s0.body[1]
+      s0.dir = { x: h.x - nk.x, y: h.y - nk.y }
+    }
 
     const occupied = (p: P) => walls.has(key(p)) || snakes.some((s) => s.body.some((b) => b.x === p.x && b.y === p.y))
     const freeCell = (): P => {
@@ -57,7 +88,25 @@ const engine: Engine = {
       }
       return { x: 1, y: 1 }
     }
-    let food = { ...freeCell(), e: rng.pick(t.items) }
+    interface Food extends P { e: string; ch?: string; right?: boolean }
+    let foods: Food[] = []
+    let wordIx = 0
+    let wordPos = 0
+    let wordsDone = 0
+    const nWords = byDiff(env, 3, 4, 5)
+    const target = () => WORDS[(wordIx * 7 + env.seed) % WORDS.length]
+    const refill = () => {
+      if (word) {
+        const w = target()
+        const right = w[wordPos]
+        foods = [{ ...freeCell(), e: '', ch: right, right: true }]
+        const pool = (w + 'AEIOURSTLN').split('').filter((c) => c !== right)
+        for (let i = 0; i < 3; i++) foods.push({ ...freeCell(), e: '', ch: rng.pick(pool) })
+        return
+      }
+      const want = rivals ? 5 : trail ? 0 : 1
+      while (foods.length < want) foods.push({ ...freeCell(), e: rng.pick(t.items) })
+    }
     let gold: (P & { ttl: number }) | null = null
     let eaten = 0
     let level = 1
@@ -78,13 +127,20 @@ const engine: Engine = {
     bag.add(swipe(st.canvas, (d) => turn(snakes[0], D[d])))
     if (!two) bag.add(vpad(env.host, k, 'dpad'))
 
+    refill()
+    const goalLen = byDiff(env, 22, 30, 40)
     const hud = () => {
-      env.score(two ? Math.max(...snakes.map((s) => s.score)) : snakes[0].score)
-      env.status(two ? `P1 ${snakes[0].score} · P2 ${snakes[1].score}` : `Level ${level} · Length ${snakes[0].body.length}`)
+      const me = snakes[0]
+      env.score(two ? Math.max(snakes[0].score, snakes[1].score) : me.score)
+      if (two) env.status(`P1 ${snakes[0].score} · P2 ${snakes[1].score}`)
+      else if (word) env.status(`Word ${wordsDone + 1}/${nWords} · ${target().slice(0, wordPos)}${'_'.repeat(target().length - wordPos)}`)
+      else if (inverse) env.status(`Length ${me.body.length} → 3`)
+      else if (trail) env.status(`Rivals ${snakes.filter((o) => o.ai && o.alive).length} · Level ${level}`)
+      else if (rivals) env.status(`Length ${me.body.length}/${goalLen} · Rivals ${snakes.filter((o) => o.ai && o.alive).length}`)
+      else env.status(`Level ${level} · Length ${me.body.length}`)
     }
-    hud()
 
-    const finish = () => {
+    const finish = (won = false, msg = '') => {
       if (over) return
       over = true
       if (two) {
@@ -93,15 +149,63 @@ const engine: Engine = {
         env.sfx('win')
         env.end({ score: Math.max(a.score, b.score), won: true, text: `${winner} wins!` })
       } else {
-        env.sfx('lose')
-        env.end({ score: snakes[0].score, won: false, text: `Reached level ${level}, length ${snakes[0].body.length}` })
+        env.sfx(won ? 'win' : 'lose')
+        env.end({ score: snakes[0].score + (won ? 200 : 0), won, text: msg || `Reached level ${level}, length ${snakes[0].body.length}` })
       }
     }
 
+    // ---- computer-controlled snakes (light cycles, rival snakes)
+    const blocked = (c: P) => {
+      if (wrap) c = { x: (c.x + COLS) % COLS, y: (c.y + ROWS) % ROWS }
+      return c.x < 0 || c.y < 0 || c.x >= COLS || c.y >= ROWS || walls.has(key(c)) || snakes.some((o) => o.body.some((b) => b.x === c.x && b.y === c.y))
+    }
+    const think = (s: Snake) => {
+      const h = s.body[0]
+      const cands = [s.dir, { x: s.dir.y, y: -s.dir.x }, { x: -s.dir.y, y: s.dir.x }]
+      let best = s.dir
+      let bs = -1e9
+      for (const d of cands) {
+        let free = 0
+        let c = { x: h.x + d.x, y: h.y + d.y }
+        const first = c
+        while (free < 10 && !blocked(c)) {
+          free++
+          c = { x: c.x + d.x, y: c.y + d.y }
+        }
+        let sc = free * 2 + rng() * 1.5 + (d === s.dir ? 1.5 : 0)
+        if (free === 0) sc -= 100
+        if (rivals && foods.length) {
+          const f = foods.reduce((a, b) => (Math.abs(a.x - h.x) + Math.abs(a.y - h.y) < Math.abs(b.x - h.x) + Math.abs(b.y - h.y) ? a : b))
+          sc -= (Math.abs(f.x - first.x) + Math.abs(f.y - first.y)) * 0.9
+        } else if (trail) {
+          const ph = snakes[0].body[0]
+          if (ph) sc -= (Math.abs(ph.x - first.x) + Math.abs(ph.y - first.y)) * 0.06
+        }
+        if (sc > bs) {
+          bs = sc
+          best = d
+        }
+      }
+      s.dir = best
+    }
+    const kill = (s: Snake) => {
+      s.alive = false
+      env.sfx('hit')
+      fx.burst(s.body[0].x * CELL + CELL / 2, s.body[0].y * CELL + CELL / 2, s.color, 30, 220)
+      if (s.ai) {
+        if (rivals) for (let i = 1; i < s.body.length && foods.length < 30; i += 2) foods.push({ ...s.body[i], e: rng.pick(t.items) })
+        s.body = []
+        hud()
+      }
+    }
+    let ticks = 0
+
     const tick = () => {
+      ticks++
       for (const s of snakes) {
         if (!s.alive) continue
-        if (s.next.length) s.dir = s.next.shift()!
+        if (s.ai) think(s)
+        else if (s.next.length) s.dir = s.next.shift()!
         let h = { x: s.body[0].x + s.dir.x, y: s.body[0].y + s.dir.y }
         if (wrap) h = { x: (h.x + COLS) % COLS, y: (h.y + ROWS) % ROWS }
         if (portalPair) {
@@ -113,26 +217,65 @@ const engine: Engine = {
           }
         }
         const out = h.x < 0 || h.y < 0 || h.x >= COLS || h.y >= ROWS
-        if (out || walls.has(key(h)) || snakes.some((o) => o.body.some((b, i) => b.x === h.x && b.y === h.y && !(o === s && i === o.body.length - 1 && !s.grow)))) {
-          s.alive = false
-          env.sfx('hit')
-          fx.burst(s.body[0].x * CELL + CELL / 2, s.body[0].y * CELL + CELL / 2, s.color, 30, 220)
+        const growing = trail || s.grow > 0
+        if (out || walls.has(key(h)) || snakes.some((o) => o.body.some((b, i) => b.x === h.x && b.y === h.y && !(o === s && i === o.body.length - 1 && !growing)))) {
+          kill(s)
           continue
         }
         s.body.unshift(h)
-        if (h.x === food.x && h.y === food.y) {
-          s.grow += 2
-          s.score += 10 * level
-          eaten++
-          env.sfx('point')
-          fx.burst(h.x * CELL + CELL / 2, h.y * CELL + CELL / 2, t.good, 14)
-          food = { ...freeCell(), e: rng.pick(t.items) }
-          if (eaten % 5 === 0) {
-            level++
-            step = Math.max(0.045, step * 0.9)
-            env.sfx('power')
+        const fi = foods.findIndex((f) => f.x === h.x && f.y === h.y)
+        let popExtra = 0
+        if (fi >= 0) {
+          const f = foods[fi]
+          foods.splice(fi, 1)
+          const px = h.x * CELL + CELL / 2
+          const py = h.y * CELL + CELL / 2
+          if (word) {
+            if (f.right) {
+              wordPos++
+              s.score += 10 * level
+              s.grow += 1
+              env.sfx('point')
+              fx.burst(px, py, t.good, 14)
+              if (wordPos >= target().length) {
+                wordsDone++
+                wordIx++
+                wordPos = 0
+                level++
+                step = Math.max(0.05, step * 0.92)
+                s.score += 50 * level
+                env.sfx('power')
+              }
+            } else {
+              s.score = Math.max(0, s.score - 5)
+              popExtra = s.body.length > 5 ? 2 : 0
+              env.sfx('hit')
+              fx.burst(px, py, t.danger, 14)
+            }
+            refill()
+          } else if (inverse) {
+            popExtra = 1
+            s.score += 10 * level
+            eaten++
+            env.sfx('point')
+            fx.burst(px, py, t.good, 14)
+            refill()
+          } else {
+            s.grow += 2
+            if (!s.ai) s.score += 10 * level
+            if (!s.ai) {
+              eaten++
+              env.sfx('point')
+              fx.burst(px, py, t.good, 14)
+              if (eaten % 5 === 0) {
+                level++
+                step = Math.max(0.045, step * 0.9)
+                env.sfx('power')
+              }
+              if (!gold && !rivals && rng.chance(0.3)) gold = { ...freeCell(), ttl: 6 }
+            }
+            refill()
           }
-          if (!gold && rng.chance(0.3)) gold = { ...freeCell(), ttl: 6 }
         } else if (gold && h.x === gold.x && h.y === gold.y) {
           s.score += 50 * level
           s.grow += 4
@@ -141,10 +284,25 @@ const engine: Engine = {
           fx.burst(h.x * CELL + CELL / 2, h.y * CELL + CELL / 2, '#facc15', 24)
         }
         if (s.grow > 0) s.grow--
-        else s.body.pop()
+        else if (!trail) s.body.pop()
+        for (let q = 0; q < popExtra && s.body.length > 3; q++) s.body.pop()
+        if (trail && !s.ai) s.score += 1
+      }
+      if (trail && ticks % 60 === 0) {
+        level++
+        step = Math.max(0.06, step * 0.96)
       }
       hud()
-      if (two ? snakes.some((s) => !s.alive) : !snakes[0].alive) finish()
+      if (two) {
+        if (snakes[0].alive === false || snakes[1].alive === false) finish()
+        return
+      }
+      const me = snakes[0]
+      if (!me.alive) finish(false)
+      else if ((trail || rivals) && snakes.length > 1 && snakes.every((o, i) => i === 0 || !o.alive) && trail) finish(true, 'Every rival crashed!')
+      else if (rivals && me.body.length >= goalLen) finish(true, `Grew to ${me.body.length}`)
+      else if (word && wordsDone >= nWords) finish(true, `Spelled ${wordsDone} words`)
+      else if (inverse && me.body.length <= 3) finish(true, 'Down to size!')
     }
 
     const update = (dt: number) => {
@@ -211,7 +369,12 @@ const engine: Engine = {
         ctx.restore()
       }
       const bob = 1 + Math.sin(time * 6) * 0.08
-      emoji(ctx, food.e, food.x * CELL + CELL / 2, food.y * CELL + CELL / 2, CELL * 0.9 * bob)
+      for (const f of foods) {
+        if (f.ch) {
+          roundRect(ctx, f.x * CELL + 1, f.y * CELL + 1, CELL - 2, CELL - 2, 5, t.accent2)
+          text(ctx, f.ch, f.x * CELL + CELL / 2, f.y * CELL + CELL / 2 + 1, { size: 11, color: '#000' })
+        } else emoji(ctx, f.e, f.x * CELL + CELL / 2, f.y * CELL + CELL / 2, CELL * 0.9 * bob)
+      }
       if (gold) {
         ctx.globalAlpha = gold.ttl < 2 ? 0.5 + 0.5 * Math.sin(time * 20) : 1
         emoji(ctx, '⭐', gold.x * CELL + CELL / 2, gold.y * CELL + CELL / 2, CELL * bob)
@@ -219,12 +382,13 @@ const engine: Engine = {
       }
       for (const s of snakes) {
         const n = s.body.length
+        if (!n) continue
         ctx.shadowColor = s.color
-        ctx.shadowBlur = 10
+        ctx.shadowBlur = trail ? 16 : 10
         for (let i = n - 1; i >= 0; i--) {
           const b = s.body[i]
-          const pad = i === 0 ? 1 : 2 + (i / n) * 3
-          ctx.globalAlpha = s.alive ? 1 - (i / n) * 0.45 : 0.35
+          const pad = i === 0 ? 1 : trail ? 6 : 2 + (i / n) * 3
+          ctx.globalAlpha = s.alive ? (trail ? 1 : 1 - (i / n) * 0.45) : 0.35
           roundRect(ctx, b.x * CELL + pad, b.y * CELL + pad, CELL - pad * 2, CELL - pad * 2, 6, s.color)
         }
         ctx.shadowBlur = 0
@@ -235,6 +399,10 @@ const engine: Engine = {
         // The game's own character rides the head (player 1); player 2 keeps classic eyes.
         if (s === snakes[0]) {
           emoji(ctx, t.hero, cx, cy, CELL * 1.05)
+          continue
+        }
+        if (s.ai) {
+          emoji(ctx, s.e, cx, cy, CELL * 1.05)
           continue
         }
         ctx.fillStyle = '#fff'
@@ -255,11 +423,16 @@ const engine: Engine = {
         ctx.fillStyle = g
         ctx.fillRect(0, 0, st.w, st.h)
       }
+      if (word) {
+        const w = target()
+        roundRect(ctx, st.w / 2 - w.length * 11 - 8, 4, w.length * 22 + 16, 26, 8, 'rgba(0,0,0,.55)')
+        for (let i = 0; i < w.length; i++) text(ctx, w[i], st.w / 2 + (i - (w.length - 1) / 2) * 22, 17, { size: 14, color: i < wordPos ? t.good : i === wordPos ? '#fff' : t.accent2, shadow: i === wordPos ? t.accent : undefined })
+      }
       if (!started && !over) {
         ctx.fillStyle = 'rgba(0,0,0,.45)'
         ctx.fillRect(0, st.h / 2 - 34, st.w, 68)
         text(ctx, 'PRESS A DIRECTION', st.w / 2, st.h / 2 - 10, { size: 14, color: t.accent, shadow: t.accent })
-        text(ctx, two ? 'P1: WASD   P2: ARROWS' : 'ARROWS / WASD / SWIPE', st.w / 2, st.h / 2 + 14, { size: 9, color: t.fg })
+        text(ctx, two ? 'P1: WASD   P2: ARROWS' : trail ? 'TRAP THE RIVALS · NO BRAKES' : word ? 'EAT THE LETTERS IN ORDER' : inverse ? 'EAT TO SHRINK TO 3' : rivals ? 'OUTGROW THE RIVAL SNAKES' : 'ARROWS / WASD / SWIPE', st.w / 2, st.h / 2 + 14, { size: 9, color: t.fg })
       }
     }
 
