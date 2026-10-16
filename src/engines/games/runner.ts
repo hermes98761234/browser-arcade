@@ -1,4 +1,5 @@
-// Runner: side-scrolling endless runner (jump / double jump / duck), gravity-flip, dark and vertical "climb" variants.
+// Runner: side-scrolling endless runner (jump / double jump / duck), gravity-flip, dark and vertical "climb" variants,
+// plus a 3-lane behind-the-runner mode (lane / cube / crowd / weave / hallway / rainbow road names): dodge blocks, jump barriers, crowd gates.
 import { background, Bag, byDiff, clamp, createStage, emoji, keys, loop, Particles, pointer, roundRect, Shake, text, vpad, type Engine } from '../kit'
 
 const H = 450
@@ -26,18 +27,19 @@ const engine: Engine = {
     const fx = new Particles()
     const shake = new Shake()
     const ptr = pointer(st)
-    const gravityMode = mods.has('gravity')
+    const gravityMode = mods.has('gravity') || /flip ceiling|gravity flip|flip gravity/.test(`${env.name} ${env.desc}`.toLowerCase())
     const dark = mods.has('dark')
     const climb = mods.has('climb') || /balloon|vertical|float upward/.test(`${env.name} ${env.desc}`.toLowerCase())
     const endless = mods.has('endless')
     const wind = mods.has('wind')
     const text_ = `${env.name} ${env.desc}`.toLowerCase()
+    const lanes = !gravityMode && !climb && (mods.has('lanes') || /lane|cube|crowd|weave|hallway|corridor|rainbow road|stalls|traffic/.test(text_))
     const pitty = /roof|pier|lava|crust|train|ice|sand|volcano|bridge|glacier|hop/.test(text_)
     const baseSpeed = byDiff(env, 300, 345, 390) * (mods.has('fast') ? 1.22 : mods.has('slow') ? 0.85 : 1)
     const maxSpeed = baseSpeed * 2.1
     const goal = endless || climb ? 0 : byDiff(env, 1200, 2000, 3000)
     const maxLives = byDiff(env, 4, 3, 2)
-    const dispVpad = vpad(env.host, k, 'none', gravityMode || climb ? [{ action: 'a', label: '⇅' }] : [{ action: 'down', label: '⤓' }, { action: 'a', label: '⤒' }])
+    const dispVpad = vpad(env.host, k, lanes ? 'lr' : 'none', lanes ? [{ action: 'a', label: '⤒' }] : gravityMode || climb ? [{ action: 'a', label: '⇅' }] : [{ action: 'down', label: '⤓' }, { action: 'a', label: '⤒' }])
 
     // ---------- state ----------
     let time = 0
@@ -186,7 +188,7 @@ const engine: Engine = {
     }
     let sy = 0
     bag.on(st.canvas, 'pointerdown', (e) => {
-      if (e.button === 2) return
+      if (e.button === 2 || lanes) return
       sy = st.toLocal(e).y
       k.set('a', true)
     })
@@ -686,7 +688,290 @@ const engine: Engine = {
       }
     }
 
-    const lp = loop(update, draw)
+    // ---------- lanes mode: 3-lane behind-the-runner view (dodge blocks, jump barriers, gather a crowd through gates) ----------
+    interface LObj { kind: 'block' | 'low' | 'gate' | 'coin'; lane: number; d: number; e: string; c: string; op: string; val: number; hit: boolean }
+    const lanesMode = () => {
+      const crowd = /crowd|gather/.test(text_)
+      const HY = 140
+      const BY = narrow ? 410 : 395
+      const laneW = Math.min(W * 0.26, 190)
+      const proj = (d: number) => 1 / (1 + d * 0.075)
+      const lObjs: LObj[] = []
+      let lane = 1
+      let px = 0
+      let jy = 0
+      let jv = 0
+      let v = byDiff(env, 12, 14, 16) * (mods.has('fast') ? 1.2 : 1)
+      let nextD = 22
+      let n = /crowd|gather/.test(text_) ? 5 : 1
+      let lflash = 0
+      const maxV = v * 2
+      let sx = 0
+      let sy0 = 0
+      const move = (dx: number) => {
+        lane = clamp(lane + dx, 0, 2)
+        env.sfx('move')
+      }
+      const jump = () => {
+        if (jy <= 0.001) {
+          jv = 7.2
+          env.sfx('jump')
+        }
+      }
+      bag.on(st.canvas, 'pointerdown', (e) => {
+        const p = st.toLocal(e)
+        sx = p.x
+        sy0 = p.y
+      })
+      bag.on(st.canvas, 'pointerup', (e) => {
+        const p = st.toLocal(e)
+        const dx = p.x - sx
+        const dy = p.y - sy0
+        if (Math.hypot(dx, dy) < 24) {
+          if (p.x < W * 0.4) move(-1)
+          else if (p.x > W * 0.6) move(1)
+          else jump()
+        } else if (Math.abs(dx) > Math.abs(dy)) move(dx > 0 ? 1 : -1)
+        else if (dy < 0) jump()
+      })
+      const endLane = (won: boolean, msg: string) => {
+        if (over) return
+        over = true
+        env.sfx(won ? 'win' : 'lose')
+        env.end({ score, won, text: msg })
+      }
+      const hurtL = (amount: number) => {
+        if (crowd) {
+          n = Math.max(0, n - amount)
+          lflash = 0.3
+          shake.kick(6)
+          env.sfx('hit')
+          if (n <= 0) endLane(false, `The crowd is gone after ${Math.floor(dist / 40)} m`)
+          return
+        }
+        if (invuln > 0) return
+        lives--
+        invuln = 1.4
+        lflash = 0.35
+        v = Math.max(baseSpeed / 25, v * 0.8)
+        shake.kick(9)
+        env.sfx('hit')
+        fx.burst(px, BY - 30, t.danger, 20, 240, 4)
+        if (lives <= 0) endLane(false, `Ran ${Math.floor(dist / 40)} m, ${coinsGot} pickups`)
+      }
+      const spawnRow = () => {
+        const lvl = clamp(dist / 40 / 1500, 0, 1)
+        const rowE = () => rng.pick(t.foes)
+        const mkO = (kind: LObj['kind'], ln: number, extra: Partial<LObj> = {}): LObj => ({ kind, lane: ln, d: nextD, e: rowE(), c: rng.pick(t.blocks), op: '', val: 0, hit: false, ...extra })
+        if (crowd) {
+          const a = rng.int(0, 2)
+          let b = rng.int(0, 2)
+          if (b === a) b = (a + 1 + rng.int(0, 1)) % 3
+          const good = rng.chance(0.5 + (n < 10 ? 0.2 : 0))
+          const big = Math.max(2, Math.round(n * 0.2))
+          lObjs.push(mkO('gate', a, good ? (rng.chance(0.4) ? { op: 'x', val: 2 } : { op: '+', val: rng.int(3, 7) + big }) : { op: '+', val: rng.int(2, 5) }))
+          lObjs.push(mkO('gate', b, rng.chance(0.5) ? { op: '-', val: rng.int(2, 4) + Math.round(n * 0.2) } : { op: 'x', val: 0.5 }))
+          const c = 3 - a - b
+          if (rng.chance(0.4 + lvl * 0.3)) lObjs.push(mkO('block', c))
+          else lObjs.push(mkO('coin', c))
+        } else {
+          const safe = rng.int(0, 2)
+          if (rng.chance(0.2 + lvl * 0.15)) {
+            for (let l = 0; l < 3; l++) lObjs.push(mkO('low', l))
+          } else {
+            for (let l = 0; l < 3; l++) {
+              if (l === safe) lObjs.push(mkO('coin', l))
+              else if (rng.chance(byDiff(env, 0.55, 0.7, 0.85))) lObjs.push(mkO('block', l))
+            }
+          }
+        }
+        nextD += clamp(v * 0.5, 7, 14) * byDiff(env, 1.25, 1, 0.88) * (crowd ? 1.7 : 1)
+      }
+      const update = (dt: number) => {
+        time += dt
+        hint = Math.max(0, hint - dt)
+        lflash = Math.max(0, lflash - dt)
+        fx.update(dt, 400)
+        shake.update(dt)
+        if (over) return
+        invuln = Math.max(0, invuln - dt)
+        if (k.hit('left')) move(-1)
+        if (k.hit('right')) move(1)
+        if (k.hit('up') || k.hit('a')) jump()
+        v = Math.min(maxV, v + 0.12 * dt * byDiff(env, 0.8, 1, 1.2))
+        px += ((lane - 1) * laneW - px) * Math.min(1, dt * 14)
+        if (jy > 0 || jv > 0) {
+          jv -= 22 * dt
+          jy = Math.max(0, jy + jv * dt)
+          if (jy === 0) jv = 0
+        }
+        dist += v * dt * 40
+        nextD -= v * dt
+        for (const o of lObjs) o.d -= v * dt
+        while (nextD < 70) spawnRow()
+        while (lObjs.length && lObjs[0].d < -3) lObjs.shift()
+        for (const o of lObjs) {
+          if (o.hit || o.d > 0.7 || o.d < -0.7 || o.lane !== lane) continue
+          if (o.kind === 'low' && jy > 0.9) continue
+          o.hit = true
+          if (o.kind === 'coin') {
+            coinsGot++
+            bonus += 10
+            n += crowd ? 1 : 0
+            env.sfx('point')
+            fx.burst(W / 2 + (o.lane - 1) * laneW * proj(0), BY - 30, t.accent2, 8, 150, 3)
+          } else if (o.kind === 'gate') {
+            const before = n
+            if (o.op === '+') n += o.val
+            else if (o.op === 'x') n = Math.max(1, Math.round(n * o.val))
+            else n = n - o.val
+            if (n < before) hurtL(0)
+            else env.sfx('power')
+            if (n <= 0) endLane(false, `The crowd is gone after ${Math.floor(dist / 40)} m`)
+            n = Math.max(0, n)
+          } else hurtL(crowd ? 4 + Math.round(n * 0.3) : 1)
+        }
+        score = Math.floor(dist / 40) + bonus + (crowd ? n * 10 : 0)
+        env.score(score)
+        env.status(crowd ? `👥 ${n} · ${Math.floor(dist / 40)} m${goal ? ` / ${goal}` : ''}` : `${'❤️'.repeat(Math.max(0, lives))} · ${Math.floor(dist / 40)} m${goal ? ` / ${goal}` : ''}`)
+        if (goal && dist / 40 >= goal) endLane(true, crowd ? `Crowd of ${n} reached the finish!` : `Goal reached! ${Math.floor(dist / 40)} m, ${coinsGot} pickups`)
+      }
+      const sxOf = (ln: number, s: number) => W / 2 + (ln - 1) * laneW * s
+      const draw = () => {
+        ctx.save()
+        shake.apply(ctx)
+        background(ctx, W, HY + 4, t, 30, env.seed)
+        ctx.fillStyle = t.bg2
+        ctx.fillRect(0, HY, W, H - HY)
+        // road
+        ctx.fillStyle = '#3d3d4a'
+        ctx.beginPath()
+        ctx.moveTo(W / 2 - laneW * 1.5 * 0.1, HY)
+        ctx.lineTo(W / 2 + laneW * 1.5 * 0.1, HY)
+        ctx.lineTo(W / 2 + laneW * 1.5 * 1.25, H)
+        ctx.lineTo(W / 2 - laneW * 1.5 * 1.25, H)
+        ctx.fill()
+        ctx.strokeStyle = t.accent
+        ctx.lineWidth = 3
+        ctx.globalAlpha = 0.8
+        ctx.beginPath()
+        ctx.moveTo(W / 2 - laneW * 1.5 * 0.1, HY)
+        ctx.lineTo(W / 2 - laneW * 1.5 * 1.25, H)
+        ctx.moveTo(W / 2 + laneW * 1.5 * 0.1, HY)
+        ctx.lineTo(W / 2 + laneW * 1.5 * 1.25, H)
+        ctx.stroke()
+        ctx.globalAlpha = 0.35
+        ctx.strokeStyle = '#fff'
+        ctx.lineWidth = 2
+        for (const f of [-0.5, 0.5]) {
+          ctx.beginPath()
+          ctx.moveTo(W / 2 + f * laneW * 0.1 * 2, HY)
+          ctx.lineTo(W / 2 + f * laneW * 1.25 * 2, H)
+          ctx.stroke()
+        }
+        // moving cross stripes
+        for (let i = 0; i < 12; i++) {
+          const d = (((i * 6 - dist / 40) % 72) + 72) % 72
+          const s = proj(d)
+          const y = HY + (BY - HY) * s
+          ctx.beginPath()
+          ctx.moveTo(W / 2 - laneW * 1.5 * s, y)
+          ctx.lineTo(W / 2 + laneW * 1.5 * s, y)
+          ctx.stroke()
+        }
+        ctx.globalAlpha = 1
+        const sorted = lObjs.filter((o) => o.d > -2 && o.d < 70).sort((a, b) => b.d - a.d)
+        for (const o of sorted) {
+          if (o.hit && o.kind === 'coin') continue
+          const s = proj(Math.max(0, o.d))
+          const x = sxOf(o.lane, s)
+          const y = HY + (BY - HY) * s
+          const u = 110 * s
+          ctx.globalAlpha = Math.min(1, (70 - o.d) / 8)
+          if (o.kind === 'block') {
+            ctx.fillStyle = o.c
+            ctx.beginPath()
+            ctx.roundRect(x - u * 0.55, y - u * 1.0, u * 1.1, u * 1.0, u * 0.12)
+            ctx.fill()
+            ctx.fillStyle = 'rgba(0,0,0,.25)'
+            ctx.fillRect(x - u * 0.55, y - u * 0.25, u * 1.1, u * 0.25)
+            emoji(ctx, o.e, x, y - u * 0.55, u * 0.8)
+          } else if (o.kind === 'low') {
+            ctx.fillStyle = t.danger
+            ctx.fillRect(x - laneW * s * 0.5, y - u * 0.38, laneW * s, u * 0.28)
+            ctx.fillStyle = '#fff'
+            for (let q = 0; q < 4; q++) ctx.fillRect(x - laneW * s * 0.5 + q * laneW * s * 0.25 + 2 * s, y - u * 0.38, laneW * s * 0.12, u * 0.28)
+          } else if (o.kind === 'gate') {
+            const goodG = o.op === '+' || (o.op === 'x' && o.val >= 1)
+            ctx.fillStyle = goodG ? t.good : t.danger
+            ctx.globalAlpha *= 0.75
+            ctx.beginPath()
+            ctx.roundRect(x - laneW * s * 0.46, y - u * 1.3, laneW * s * 0.92, u * 1.3, u * 0.1)
+            ctx.fill()
+            ctx.globalAlpha = Math.min(1, (70 - o.d) / 8)
+            text(ctx, o.op === 'x' ? (o.val >= 1 ? `x${o.val}` : '/2') : `${o.op}${o.val}`, x, y - u * 0.65, { size: Math.max(6, u * 0.4), color: '#fff', shadow: '#000' })
+          } else {
+            ctx.shadowColor = t.accent2
+            ctx.shadowBlur = 8
+            emoji(ctx, t.items[o.lane % t.items.length], x, y - u * 0.4 + Math.sin(time * 6 + o.d) * 3, u * 0.6)
+            ctx.shadowBlur = 0
+          }
+        }
+        ctx.globalAlpha = 1
+        // player (or crowd)
+        const bx = W / 2 + px
+        const by = BY - jy * 70
+        ctx.fillStyle = 'rgba(0,0,0,.35)'
+        ctx.beginPath()
+        ctx.ellipse(bx, BY + 4, 30 - jy * 6, 8, 0, 0, Math.PI * 2)
+        ctx.fill()
+        const hs = narrow ? 50 : 62
+        if (crowd) {
+          const cnt = Math.min(n, 14)
+          for (let q = cnt - 1; q >= 0; q--) {
+            const ang = q * 2.4
+            const r = q === 0 ? 0 : 10 + Math.sqrt(q) * 14
+            emoji(ctx, t.hero, bx + Math.cos(ang) * r, by - 26 + Math.sin(ang) * r * 0.4, hs * 0.6)
+          }
+          text(ctx, `${n}`, bx, by - hs - 14, { size: 18, color: t.fg, shadow: '#000' })
+        } else if (invuln <= 0 || Math.floor(time * 14) % 2) emoji(ctx, t.hero, bx, by - 28, hs, px * 0.002)
+        fx.draw(ctx)
+        if (dark) {
+          const gr = ctx.createRadialGradient(bx, BY - 40, 90, bx, BY - 120, 420)
+          gr.addColorStop(0, 'rgba(0,0,0,0)')
+          gr.addColorStop(1, 'rgba(0,0,0,.93)')
+          ctx.fillStyle = gr
+          ctx.fillRect(-20, -20, W + 40, H + 40)
+        }
+        ctx.restore()
+        if (lflash > 0) {
+          ctx.fillStyle = t.danger
+          ctx.globalAlpha = lflash * 0.7
+          ctx.fillRect(0, 0, W, H)
+          ctx.globalAlpha = 1
+        }
+        text(ctx, `${score}`, W - 16, 24, { size: 20, color: t.fg, align: 'right', shadow: t.bg })
+        text(ctx, crowd ? `👥${n}` : '❤️'.repeat(Math.max(0, lives)), 16, 24, { size: 18, align: 'left' })
+        if (goal) {
+          const p = clamp(dist / 40 / goal, 0, 1)
+          ctx.fillStyle = 'rgba(0,0,0,.35)'
+          ctx.fillRect(16, 44, 200, 6)
+          ctx.fillStyle = t.good
+          ctx.fillRect(16, 44, 200 * p, 6)
+          emoji(ctx, '🏁', 16 + 200 * p, 47, 16)
+        }
+        if (hint > 0 && !over) {
+          ctx.globalAlpha = Math.min(1, hint)
+          text(ctx, env.name.toUpperCase(), W / 2, 90, { size: narrow ? 14 : 22, color: t.fg, shadow: t.accent })
+          text(ctx, narrow ? 'TAP SIDES / SWIPE: CHANGE LANE · UP: JUMP' : '←/→ OR A/D: CHANGE LANE · ↑ / SPACE: JUMP', W / 2, 120, { size: narrow ? 8 : 11, color: t.fg })
+          ctx.globalAlpha = 1
+        }
+      }
+      return { update, draw }
+    }
+    const lm = lanes ? lanesMode() : null
+
+    const lp = lm ? loop(lm.update, lm.draw) : loop(update, draw)
     return {
       pause: (p) => lp.pause(p),
       destroy() {
