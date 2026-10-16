@@ -20,8 +20,11 @@ const engine: Engine = {
     const k = keys()
     const host = env.host
     const blurb = `${env.name} ${env.desc}`.toLowerCase()
+    // airships, biplanes, dragons and sky creatures fly over open sky even when the theme is space/ocean
+    const skyish = /zeppelin|biplane|dragon|sky |cloud|cape|barnstorm|airship|plane/.test(blurb) && !/space|orbit|satellite|solar|galax/.test(blurb)
     const kind: Kind =
-      t.id === 'space' || /space|asteroid|orbit|dogfight|satellite|solar|planet|galax|star/.test(blurb) ? 'space'
+      skyish ? 'canyon'
+        : t.id === 'space' || /space|asteroid|orbit|dogfight|satellite|solar|planet|galax|star/.test(blurb) ? 'space'
         : t.id === 'ocean' || mods.has('swim') || /ocean|underwater|cave|manta|whale|sea|reef/.test(blurb) ? 'water'
           : t.id === 'cyberpunk' || t.id === 'neon' || t.id === 'robot' || /tunnel|corridor|courier|cube|netrunner|firewall|data/.test(blurb) ? 'tunnel'
             : 'canyon'
