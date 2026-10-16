@@ -3,19 +3,25 @@
 <head>
 <meta charset="utf-8">
 <style>
-  body { margin: 0; width: 1200px; height: 630px; display: flex; align-items: center; gap: 56px; padding: 0 80px; box-sizing: border-box;
-    background: linear-gradient(135deg, #0f1115 0%, #1f232c 100%); color: #e6e8ec; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  img { width: 300px; height: 300px; border-radius: 64px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
-  h1 { font-size: 64px; line-height: 1.05; margin: 0 0 20px; }
-  p { font-size: 28px; color: #9aa1ad; margin: 0 0 28px; line-height: 1.35; }
-  .url { font-size: 22px; color: #60a5fa; }
+  body { margin: 0; width: 1200px; height: 630px; display: flex; align-items: center; gap: 56px; padding: 0 80px; box-sizing: border-box; overflow: hidden;
+    background: radial-gradient(800px 500px at 0% 0%, rgba(124,58,237,.55), transparent 60%), radial-gradient(700px 400px at 100% 100%, rgba(34,211,238,.35), transparent 60%), #0a0617;
+    color: #f4f1ff; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; position: relative; }
+  .emo { position: absolute; font-size: 54px; opacity: .22; }
+  img { width: 280px; height: 280px; border-radius: 64px; box-shadow: 0 0 60px rgba(124,58,237,.8); position: relative; }
+  h1 { font-size: 72px; line-height: 1.02; margin: 0 0 18px; font-weight: 900; letter-spacing: -.01em; }
+  h1 span { color: #e879f9; text-shadow: 0 0 30px rgba(232,121,249,.7); }
+  p { font-size: 28px; color: #c8c0ee; margin: 0 0 26px; line-height: 1.35; }
+  .url { font-size: 24px; color: #22d3ee; font-weight: 700; }
+  div.t { position: relative; }
 </style>
 </head>
 <body>
+  <span class="emo" style="left:40px;top:30px">👾</span><span class="emo" style="left:420px;top:520px">🐉</span><span class="emo" style="left:1100px;top:40px">🚀</span>
+  <span class="emo" style="left:700px;top:20px">🧩</span><span class="emo" style="left:1040px;top:500px">🏎️</span><span class="emo" style="left:60px;top:520px">🃏</span>
   <img src="../public/favicon.svg" alt="">
-  <div>
-    <h1>Thousands of games, one click away</h1>
-    <p>Arcade, puzzle, strategy and story games that run right in your browser. No sign-up.</p>
+  <div class="t">
+    <h1>3000 games.<br><span>Zero sign-ups.</span></h1>
+    <p>Arcade, puzzles, strategy, racing and hand-written story adventures — free in your browser.</p>
     <div class="url">hermes98761234.github.io/browser-arcade</div>
   </div>
 </body>
