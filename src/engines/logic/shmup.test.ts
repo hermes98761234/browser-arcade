@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { makeRng } from '../kit'
-import { BOSS_KINDS, bossVolley, waveSpec } from './shmup'
+import { BOSS_KINDS, bossVolley, kindsFor, patternStyle, waveSpec } from './shmup'
 
 describe('shmup logic', () => {
   it('waves are deterministic and grow', () => {
@@ -14,5 +14,10 @@ describe('shmup logic', () => {
       expect(v.length).toBeGreaterThan(0)
       for (const s of v) expect(Number.isFinite(s.a) && s.spd > 0).toBe(true)
     }
+  })
+  it('has volleys for the extra pattern kinds', () => {
+    for (const k of ['snow', 'star', 'ribbon', 'curtain'] as const) expect(bossVolley(k, 12, 3, 0).length).toBeGreaterThan(2)
+    expect(patternStyle('petal storm cherry blossom')).toBe('flower')
+    expect(kindsFor('snow', 0)).toHaveLength(3)
   })
 })

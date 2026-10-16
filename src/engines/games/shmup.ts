@@ -2,7 +2,7 @@
 // Mods: hell|tiny (dense bullets, tiny hitbox, graze), boss (boss rush), laser (piercing beam), wind (bullets drift).
 // Name keyword "swarm"|"invader" -> Space-Invaders style stepping grid.
 import { background, Bag, byDiff, clamp, createStage, emoji, isTouch, keys, loop, Particles, pointer, roundRect, Shake, text, vpad, type Engine } from '../kit'
-import { BOSS_KINDS, bossVolley, waveSpec, type Formation, type Group } from '../logic/shmup'
+import { bossVolley, kindsFor, patternStyle, waveSpec, type BossKind, type Formation, type Group } from '../logic/shmup'
 
 const W = 420
 const H = 600
@@ -11,9 +11,9 @@ const TAU = Math.PI * 2
 type PowerKind = 'P' | 'S' | 'B' | 'H' | 'X'
 const PU: Record<PowerKind, { e: string; c: string }> = { P: { e: '🔺', c: '#f97316' }, S: { e: '🛡️', c: '#38bdf8' }, B: { e: '💣', c: '#a78bfa' }, H: { e: '❤️', c: '#f87171' }, X: { e: '⭐', c: '#facc15' } }
 interface Enemy { x: number; y: number; hp: number; max: number; kind: Formation; t: number; wait: number; ox: number; ph: number; fire: number; foe: number; r: number; flash: number; idx: number; tx: number; hx: number; hy: number }
-interface Bullet { x: number; y: number; vx: number; vy: number; r: number; grazed: boolean; c: number }
+interface Bullet { x: number; y: number; vx: number; vy: number; r: number; grazed: boolean; c: number; age: number; hm?: boolean; bounce?: number; mine?: boolean; ghost?: boolean }
 interface Shot { x: number; y: number; vx: number; vy: number; dmg: number; pierce: boolean }
-interface Boss { x: number; y: number; hp: number; max: number; t: number; fire: number; k: number; flash: number; foe: number; kinds: typeof BOSS_KINDS; enter: number }
+interface Boss { x: number; y: number; hp: number; max: number; t: number; fire: number; k: number; flash: number; foe: number; kinds: BossKind[]; enter: number }
 
 const engine: Engine = {
   start(env) {
@@ -25,22 +25,40 @@ const engine: Engine = {
     const bag = new Bag()
     const fx = new Particles()
     const shake = new Shake()
-    const hell = mods.has('hell') || mods.has('tiny') || /danmaku|bullet (hell|curtain)/i.test(env.name)
+    const S = `${env.name} ${env.desc}`.toLowerCase()
+    const hell = mods.has('hell') || mods.has('tiny') || /danmaku|bullet|barrage|inferno|graze|hell|curtain|petal|snowflake|spiral|constellation|ribbon|orbs?\b|flak|reverb|echo|pattern|fairy|witch|cathedral|hitbox/.test(S)
+    const style = patternStyle(S)
+    const polarity = mods.has('color') || /monochrome|polarity/.test(S)
+    const nCol = /monochrome/.test(S) ? 2 : 3
+    const absorb = !polarity && (mods.has('bomb') || /absorb/.test(S))
+    const mirror = mods.has('mirror') || /reflect|mirror/.test(S)
+    const echo = /echo|reappear/.test(S)
+    const slowmo = /slow mo|focus mode slows/.test(S)
+    const homing = /homing|orbs\b/.test(S)
+    const orbit = /orbit barrage|orbit the player/.test(S)
+    const mines = mods.has('mines') || /mines/.test(S)
+    const beat = /beat|reverb|bass|music/.test(S)
+    const grazer = /graze/.test(S)
+    const core = /overload|reactor|core/.test(S)
+    const giant = mods.has('giant')
+    const flicker = /flicker/.test(S)
+    const oneHit = /one hit/.test(S)
+    const pocket = /pocket|micro/.test(S)
     const tiny = mods.has('tiny')
-    const rush = mods.has('boss') || /boss rush/i.test(env.name)
+    const rush = mods.has('boss') || /boss|titan|giants?\b|lords|gauntlet|fortress|colossi/.test(S) || core
     const laser = mods.has('laser')
     const wind = mods.has('wind')
     const invaders = /swarm|invader/i.test(env.name)
     const hb = tiny ? 2.5 : hell ? 3 : 7
     const size = tiny ? 24 : 38
-    const TOTAL = rush ? byDiff(env, 3, 4, 5) : byDiff(env, 6, 8, 10)
+    const TOTAL = pocket ? 4 : rush ? byDiff(env, 3, 4, 5) : byDiff(env, 6, 8, 10)
     const bossEvery = 3
     const dens = hell ? 1.7 : 1
     const bspd = byDiff(env, 120, 140, 160) * (hell ? 0.85 : 1)
-    const hasFocus = hell
-    bag.add(vpad(env.host, k, 'none', [{ action: 'b', label: '💣' }, ...(hasFocus ? [{ action: 'a' as const, label: '◎' }] : [])]))
+    const hasFocus = hell || slowmo || polarity || absorb || orbit
+    bag.add(vpad(env.host, k, 'none', [{ action: 'b', label: '💣' }, ...(hasFocus ? [{ action: 'a' as const, label: polarity ? '◐' : absorb ? '🛡' : orbit ? '💨' : '◎' }] : [])]))
 
-    let lives = byDiff(env, 5, 4, 3) + (mods.has('zen') ? 3 : 0)
+    let lives = oneHit ? 1 : byDiff(env, 5, 4, 3) + (mods.has('zen') ? 3 : 0)
     let bombs = byDiff(env, 3, 2, 2)
     let score = 0
     let weapon = rush ? 3 : 1
@@ -60,6 +78,16 @@ const engine: Engine = {
     let shield = 0
     let fireT = 0
     let flash = 0
+    let pol = 0
+    let charge = 0
+    let slowE = 1
+    let beatT = 0
+    let beatP = 0
+    let orbT = 3
+    let dashT = 0
+    let rec: { t: number; x: number; y: number; vx: number; vy: number; r: number }[] = []
+    let orbRing: { a0: number; t: number; gap: number } | null = null
+    const polCols = nCol === 2 ? ['#f8fafc', '#1e293b'] : ['#f87171', '#4ade80', '#60a5fa']
     let bombR = -1
     let enemies: Enemy[] = []
     let bullets: Bullet[] = []
@@ -84,8 +112,7 @@ const engine: Engine = {
     }
 
     const bossPick = () => {
-      const o = (bi * 2) % BOSS_KINDS.length
-      return [BOSS_KINDS[o], BOSS_KINDS[(o + 1) % 5], BOSS_KINDS[(o + 3) % 5]] as typeof BOSS_KINDS
+      return kindsFor(style, (bi * 2) % 5)
     }
     const startWave = () => {
       wave++
@@ -94,7 +121,7 @@ const engine: Engine = {
       const spec = waveSpec(wave, rng, env.difficulty, isBoss, invaders)
       queue = spec.groups.slice()
       if (isBoss) {
-        const hp = (rush ? 150 : 110) + bi * 70 + env.difficulty * 40
+        const hp = ((rush ? 150 : 110) + bi * 70 + env.difficulty * 40) * (oneHit ? 0.35 : giant ? 1.5 : 1)
         boss = { x: W / 2, y: -80, hp, max: hp, t: 0, fire: 2, k: 0, flash: 0, foe: bi % t.foes.length, kinds: bossPick(), enter: 0 }
         say(rush ? `BOSS ${bi + 1}` : 'WARNING', 2.4)
         env.sfx('power')
@@ -136,7 +163,10 @@ const engine: Engine = {
 
     const fireBullet = (x: number, y: number, a: number, sp: number, c = 0) => {
       if (bullets.length > 900) return
-      bullets.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, r: hell ? 3.8 : 5, grazed: false, c })
+      const cc = polarity ? rng.int(0, nCol - 1) : c
+      const hm = homing && c === 1
+      bullets.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, r: hm ? 8 : hell ? 3.8 : 5, grazed: false, c: cc, age: 0, hm: hm || undefined, bounce: mirror ? 1 : undefined, mine: mines || undefined })
+      if (echo && rec.length < 500) rec.push({ t: time, x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, r: hell ? 3.8 : 5 })
     }
     const aim = (x: number, y: number) => Math.atan2(px.y - y, px.x - x)
     const sp = () => bspd + wave * 6
@@ -245,8 +275,10 @@ const engine: Engine = {
       if (intro > 0.2 && !e.repeat) intro = 0
     })
 
-    const bossRadius = 44
-    const update = (dt: number) => {
+    const bsc = (core ? 1.3 : 1) * (giant ? 1.5 : 1)
+    const bossRadius = 44 * bsc
+    const update = (dt0: number) => {
+      let dt = dt0
       time += dt
       fx.update(dt)
       shake.update(dt)
@@ -267,8 +299,22 @@ const engine: Engine = {
 
       // movement
       const ax = k.axis()
-      const focus = hasFocus && k.down('a')
-      const spd = (focus ? 170 : 330)
+      const aDown = k.down('a')
+      if (polarity && k.hit('a')) {
+        pol = (pol + 1) % nCol
+        env.sfx('click')
+      }
+      if (orbit && k.hit('a') && dashT < -0.6) {
+        dashT = 0.22
+        inv = Math.max(inv, 0.3)
+        env.sfx('move')
+      }
+      dashT -= dt
+      const absorbing = absorb && aDown
+      const slowing = slowmo && aDown && slowE > 0
+      slowE = clamp(slowE + (slowing ? -0.4 : 0.2) * dt, 0, 1)
+      const focus = hasFocus && aDown && !polarity && !absorb && !orbit
+      const spd = (focus ? 170 : 330) * (dashT > 0 ? 2.6 : 1)
       if (ax.x || ax.y) {
         target.x = px.x + ax.x * spd
         target.y = px.y + ax.y * spd
@@ -303,6 +349,17 @@ const engine: Engine = {
         if (bombR > 800) bombR = -1
       }
 
+      dt = dt0 * (slowing ? 0.35 : 1)
+      if (beat) {
+        beatT += dt
+        beatP = Math.max(0, beatP - dt * 3)
+        if (beatT >= 0.5) {
+          beatT -= 0.5
+          beatP = 1
+          for (const e of enemies) e.fire -= 0.4
+          if (boss) boss.fire -= 0.35
+        }
+      }
       // waves
       if (queue.length && waveT >= queue[0].delay) spawn(queue.shift()!)
       if (!queue.length && enemies.length === 0 && !boss) {
@@ -385,20 +442,20 @@ const engine: Engine = {
         b.t += dt
         b.flash = Math.max(0, b.flash - dt)
         b.enter = Math.min(1, b.enter + dt / 2)
-        b.x = W / 2 + Math.sin(b.t * 0.75) * 130 * b.enter
-        b.y = -80 + (120 + Math.sin(b.t * 1.3) * 12 + 80) * b.enter
+        b.x = W / 2 + Math.sin(b.t * 0.75) * (core ? 0 : 130) * b.enter
+        b.y = -80 + ((core ? 130 : 120) + Math.sin(b.t * 1.3) * (core ? 3 : 12) + 80) * b.enter
         if (b.enter >= 1) {
           b.fire -= dt
           const frac = b.hp / b.max
           const ph = frac > 0.66 ? 0 : frac > 0.33 ? 1 : 2
           if (b.fire <= 0) {
             const kind = b.kinds[ph]
-            const base = kind === 'spiral' ? 0.11 : kind === 'rain' ? 0.18 : 0.9
+            const base = kind === 'spiral' || kind === 'ribbon' ? 0.11 : kind === 'rain' ? 0.18 : kind === 'curtain' ? 0.75 : 0.9
             b.fire = (base / (hell ? 1.3 : 1)) * byDiff(env, 1.3, 1, 0.85) * (1 - ph * 0.1)
             const n = Math.round(byDiff(env, 10, 13, 16) * dens)
             for (const s of bossVolley(kind, n, b.k++, aim(b.x, b.y))) {
               const o = kind === 'rain' ? Math.sin(b.k * 3.7) * 160 : 0
-              fireBullet(b.x + o, b.y + (kind === 'rain' ? -20 : 10), s.a, sp() * s.spd, b.k % 3)
+              fireBullet(b.x + o + (s.dx ?? 0), b.y + (kind === 'rain' ? -20 : 10), s.a, sp() * s.spd, b.k % 3)
             }
           }
         }
@@ -447,23 +504,91 @@ const engine: Engine = {
       }
 
       // enemy bullets
-      const gr = hell ? 16 : 14
+      const gr = grazer ? 34 : hell ? 16 : 14
+      if (echo) {
+        for (let i = rec.length - 1; i >= 0; i--) {
+          const r = rec[i]
+          if (time - r.t >= 4) {
+            bullets.push({ x: r.x, y: r.y, vx: r.vx, vy: r.vy, r: r.r, grazed: false, c: -1, age: 0, ghost: true })
+            rec.splice(i, 1)
+          }
+        }
+      }
+      const soak = (b: Bullet) => {
+        charge++
+        add(5)
+        fx.burst(b.x, b.y, '#fff', 2, 70, 2)
+        if (charge >= 25) {
+          charge = 0
+          if (absorb && bombs < 5) { bombs++; say('BOMB +1', 1); hud() } else add(300)
+          env.sfx('power')
+        }
+        b.y = 9999
+      }
+      const fresh: Bullet[] = []
       for (const b of bullets) {
-        b.x += (b.vx + windX) * dt
+        b.age += dt
+        if (b.hm && b.age < 3.5) {
+          const sp0 = Math.hypot(b.vx, b.vy)
+          let da = Math.atan2(px.y - b.y, px.x - b.x) - Math.atan2(b.vy, b.vx)
+          da = Math.atan2(Math.sin(da), Math.cos(da))
+          const na = Math.atan2(b.vy, b.vx) + clamp(da, -1.4 * dt, 1.4 * dt)
+          b.vx = Math.cos(na) * sp0
+          b.vy = Math.sin(na) * sp0
+        }
+        if (b.mine) {
+          if (b.age > 0.9 && (b.vx || b.vy)) { b.vx = 0; b.vy = 0 }
+          if (b.age > 0.9) b.r = Math.min(9, b.r + dt * 6)
+          if (b.age > 5) {
+            for (let q = 0; q < 6 && bullets.length + fresh.length < 700; q++) fresh.push({ x: b.x, y: b.y, vx: Math.cos(q * 1.047) * 120, vy: Math.sin(q * 1.047) * 120, r: 3.8, grazed: false, c: 1, age: 0 })
+            b.y = 9999
+            continue
+          }
+        }
+        b.x += (b.vx + (b.mine && b.age > 0.9 ? 0 : windX)) * dt
         b.y += b.vy * dt
+        if (b.bounce) {
+          if (b.x < 0 || b.x > W) { b.vx = -b.vx; b.x = clamp(b.x, 0, W); b.bounce = 0 }
+          else if (b.y < 0 && b.vy < 0) { b.vy = -b.vy; b.bounce = 0 }
+          else if (b.y > H && b.vy > 0) { b.vy = -b.vy; b.bounce = 0 }
+        }
         const d2 = (b.x - px.x) ** 2 + (b.y - px.y) ** 2
-        if (d2 < (hb + b.r) ** 2) {
-          hitPlayer()
-          b.y = 9999
+        if (absorbing && d2 < 46 * 46) soak(b)
+        else if (d2 < (hb + b.r) ** 2) {
+          if (polarity && b.c === pol) soak(b)
+          else {
+            hitPlayer()
+            b.y = 9999
+          }
         } else if (!b.grazed && d2 < (gr + b.r) ** 2 && inv <= 0) {
           b.grazed = true
           graze++
-          add(hell ? 20 : 8)
+          add(grazer ? 25 : hell ? 20 : 8)
           if (graze % 50 === 0 && bombs < 5) { bombs++; say('GRAZE BOMB', 1); hud() }
           fx.burst(px.x, px.y, '#fff', 1, 60, 2)
         }
       }
+      for (const f of fresh) bullets.push(f)
       bullets = bullets.filter((b) => b.y > -20 && b.y < H + 20 && b.x > -20 && b.x < W + 20)
+      if (orbit && !over) {
+        orbT -= dt
+        if (orbT <= 0 && !orbRing) {
+          orbRing = { a0: rng() * TAU, t: 0, gap: rng.int(0, 9) }
+          orbT = 3.6
+        }
+        if (orbRing) {
+          orbRing.t += dt
+          const rr = 150 - orbRing.t * 40
+          for (let q = 0; q < 10; q++) {
+            if (Math.abs(q - orbRing.gap) <= 1 || Math.abs(q - orbRing.gap) >= 9) continue
+            const a = orbRing.a0 + (q / 10) * TAU + orbRing.t * 0.9
+            const ox = px.x + Math.cos(a) * rr
+            const oy = px.y + Math.sin(a) * rr
+            if ((ox - px.x) ** 2 + (oy - px.y) ** 2 < (hb + 6) ** 2) hitPlayer()
+          }
+          if (orbRing.t > 3.3) orbRing = null
+        }
+      }
       // enemy body contact
       for (const e of enemies) if (e.wait <= 0 && (e.x - px.x) ** 2 + (e.y - px.y) ** 2 < (e.r * 0.8 + hb + 2) ** 2) hitPlayer()
       if (boss && boss.enter > 0.8 && Math.abs(boss.x - px.x) < bossRadius * 0.8 && Math.abs(boss.y - px.y) < bossRadius * 0.7) hitPlayer()
@@ -511,6 +636,7 @@ const engine: Engine = {
       }
       for (const e of enemies) {
         if (e.wait > 0) continue
+        if (flicker && enemies.length > 6 && (Math.floor(time * 30) + e.idx) % 2) continue
         ctx.globalAlpha = e.flash > 0 ? 0.6 : 1
         emoji(ctx, t.foes[e.foe], e.x, e.y + Math.sin(time * 5 + e.ph) * 1.5, e.r * 2.1, e.kind === 'diver' && e.t > 0.9 ? Math.PI : 0)
         ctx.globalAlpha = 1
@@ -525,9 +651,10 @@ const engine: Engine = {
         ctx.shadowColor = t.danger
         ctx.shadowBlur = 24
         ctx.globalAlpha = b.flash > 0 ? 0.6 : 1
-        emoji(ctx, t.foes[b.foe], b.x, b.y, 96 * sc)
+        emoji(ctx, t.foes[b.foe], b.x, b.y, 96 * sc * bsc)
         ctx.globalAlpha = 1
         ctx.shadowBlur = 0
+        if (core) text(ctx, 'CORE', W / 2, 28, { size: 8, color: t.danger })
         roundRect(ctx, 40, 14, W - 80, 8, 4, 'rgba(0,0,0,.55)')
         roundRect(ctx, 40, 14, (W - 80) * Math.max(0, b.hp / b.max), 8, 4, t.danger)
       }
@@ -540,13 +667,18 @@ const engine: Engine = {
       }
       ctx.shadowBlur = 0
       for (const b of bullets) {
-        const c = bulletColors[b.c % bulletColors.length]
+        const c = b.ghost ? '#e2e8f0' : polarity ? polCols[b.c % nCol] : bulletColors[b.c % bulletColors.length]
+        ctx.globalAlpha = b.ghost ? 0.55 : 1
         ctx.fillStyle = c
+        if (polarity) { ctx.strokeStyle = '#94a3b8'; ctx.lineWidth = 1.5 }
         ctx.shadowColor = c
         ctx.shadowBlur = hell ? 4 : 8
         ctx.beginPath()
         ctx.arc(b.x, b.y, b.r + 1.5, 0, TAU)
         ctx.fill()
+        if (polarity) ctx.stroke()
+        ctx.globalAlpha = 1
+        if (polarity) continue
         ctx.fillStyle = '#fff'
         ctx.beginPath()
         ctx.arc(b.x, b.y, b.r * 0.55, 0, TAU)
@@ -564,6 +696,33 @@ const engine: Engine = {
         ctx.globalAlpha = 0.6 + Math.sin(time * 40) * 0.3
         ctx.fillRect(px.x - 2, px.y + size * 0.42, 4, 6 + Math.sin(time * 30) * 3)
         ctx.globalAlpha = 1
+      }
+      if (polarity && !over) {
+        ctx.strokeStyle = polCols[pol]
+        ctx.lineWidth = 4
+        ctx.beginPath()
+        ctx.arc(px.x, px.y, size * 0.62, 0, TAU)
+        ctx.stroke()
+      }
+      if (absorb && k.down('a') && !over) {
+        ctx.strokeStyle = '#a78bfa'
+        ctx.lineWidth = 3
+        ctx.globalAlpha = 0.6 + Math.sin(time * 20) * 0.3
+        ctx.beginPath()
+        ctx.arc(px.x, px.y, 46, 0, TAU)
+        ctx.stroke()
+        ctx.globalAlpha = 1
+      }
+      if (orbit && orbRing) {
+        const rr = 150 - orbRing.t * 40
+        ctx.fillStyle = t.danger
+        for (let q = 0; q < 10; q++) {
+          if (Math.abs(q - orbRing.gap) <= 1 || Math.abs(q - orbRing.gap) >= 9) continue
+          const a = orbRing.a0 + (q / 10) * TAU + orbRing.t * 0.9
+          ctx.beginPath()
+          ctx.arc(px.x + Math.cos(a) * rr, px.y + Math.sin(a) * rr, 6, 0, TAU)
+          ctx.fill()
+        }
       }
       if (shield > 0) {
         ctx.strokeStyle = '#38bdf8'
@@ -601,6 +760,9 @@ const engine: Engine = {
       // HUD
       for (let i = 0; i < 5; i++) roundRect(ctx, 10 + i * 12, H - 16, 9, 6, 2, i < weapon ? t.accent2 : 'rgba(255,255,255,.18)')
       if (combo >= 3) text(ctx, `${combo} CHAIN`, W - 56, H - 14, { size: 9, color: t.accent })
+      if (polarity || absorb) { roundRect(ctx, 10, H - 28, 70, 6, 3, 'rgba(255,255,255,.18)'); roundRect(ctx, 10, H - 28, 70 * Math.min(1, charge / 25), 6, 3, '#a78bfa') }
+      if (slowmo) { roundRect(ctx, 10, H - 28, 70, 6, 3, 'rgba(255,255,255,.18)'); roundRect(ctx, 10, H - 28, 70 * slowE, 6, 3, '#38bdf8') }
+      if (beatP > 0) { ctx.fillStyle = `rgba(255,255,255,${beatP * 0.08})`; ctx.fillRect(0, 0, W, H) }
       if (hell) text(ctx, `GRAZE ${graze}`, W / 2, H - 14, { size: 9, color: t.fg })
       if (wind) text(ctx, windDir(), W - 34, 30, { size: 12, color: t.fg })
       if (bannerT > 0 && intro <= 0) {
@@ -617,7 +779,7 @@ const engine: Engine = {
         text(ctx, env.name.toUpperCase(), W / 2, H / 2 - 36, { size: env.name.length > 18 ? 15 : 20, color: t.fg, shadow: t.accent })
         text(ctx, env.desc.slice(0, 40), W / 2, H / 2 - 4, { size: 9, color: t.accent2 })
         text(ctx, 'DRAG / ARROWS · AUTO-FIRE', W / 2, H / 2 + 40, { size: 9, color: t.fg })
-        text(ctx, hell ? 'B = BOMB · SPACE = FOCUS' : 'B = BOMB', W / 2, H / 2 + 60, { size: 9, color: t.fg })
+        text(ctx, polarity ? 'SPACE = SWAP COLOR · MATCH TO ABSORB' : absorb ? 'HOLD SPACE = ABSORB SHIELD' : slowmo ? 'HOLD SPACE = SLOW TIME' : orbit ? 'SPACE = DASH · FIND THE GAP' : hell ? 'B = BOMB · SPACE = FOCUS' : 'B = BOMB', W / 2, H / 2 + 60, { size: 9, color: t.fg })
         ctx.globalAlpha = 1
       }
     }

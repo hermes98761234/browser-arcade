@@ -21,8 +21,35 @@ export function waveSpec(wave: number, rng: Rng, diff: 0 | 1 | 2, boss: boolean,
   return { groups, boss: false }
 }
 
-export type BossKind = 'ring' | 'fan' | 'spiral' | 'rain' | 'flower'
-export interface Shot { a: number; spd: number }
+export type BossKind = 'ring' | 'fan' | 'spiral' | 'rain' | 'flower' | 'snow' | 'star' | 'ribbon' | 'curtain'
+export interface Shot { a: number; spd: number; dx?: number }
+export type PatternStyle = 'mixed' | 'flower' | 'spiral' | 'snow' | 'star' | 'ribbon' | 'curtain'
+
+/** Boss pattern kinds per phase, by the game's pattern style. */
+export function kindsFor(style: PatternStyle, offset: number): BossKind[] {
+  const L: Record<PatternStyle, BossKind[]> = {
+    mixed: BOSS_KINDS,
+    flower: ['flower', 'ring', 'flower', 'fan', 'flower'],
+    spiral: ['spiral', 'ring', 'spiral', 'fan', 'spiral'],
+    snow: ['snow', 'ring', 'snow', 'fan', 'snow'],
+    star: ['star', 'fan', 'star', 'ring', 'star'],
+    ribbon: ['ribbon', 'fan', 'ribbon', 'spiral', 'ribbon'],
+    curtain: ['curtain', 'rain', 'curtain', 'fan', 'curtain'],
+  }
+  const l = L[style]
+  return [l[offset % 5], l[(offset + 1) % 5], l[(offset + 3) % 5]]
+}
+
+/** Pattern style picked from a game's name and description. */
+export function patternStyle(s: string): PatternStyle {
+  if (/snowflake|fractal/.test(s)) return 'snow'
+  if (/constellation|starlight|star path/.test(s)) return 'star'
+  if (/flower|bloom|petal|garden|blossom|cathedral|stained/.test(s)) return 'flower'
+  if (/ribbon|laser/.test(s)) return 'ribbon'
+  if (/curtain/.test(s)) return 'curtain'
+  if (/spiral|inferno|vortex|overload|reactor/.test(s)) return 'spiral'
+  return 'mixed'
+}
 
 /** Bullet angles for one volley. n = density, k = volley counter (drives rotation), aim = angle to the player. */
 export function bossVolley(kind: BossKind, n: number, k: number, aim: number): Shot[] {
@@ -41,6 +68,27 @@ export function bossVolley(kind: BossKind, n: number, k: number, aim: number): S
     case 'rain':
       for (let i = 0; i < Math.ceil(n / 3); i++) out.push({ a: Math.PI / 2 + Math.sin(k * 1.7 + i * 2.1) * 0.9, spd: 0.8 + ((i * 37 + k * 11) % 10) / 20 })
       break
+    case 'snow':
+      for (let arm = 0; arm < 6; arm++) {
+        const b = (arm / 6) * TAU + k * 0.07
+        out.push({ a: b, spd: 1.1 }, { a: b + 0.13, spd: 0.85 }, { a: b - 0.13, spd: 0.85 }, { a: b + 0.26, spd: 0.65 }, { a: b - 0.26, spd: 0.65 })
+      }
+      break
+    case 'star':
+      for (let i = 0; i < n * 2; i++) {
+        const a = (i / (n * 2)) * TAU
+        const tri = Math.abs((((a * 5) / TAU + k * 0.02) % 1) - 0.5) * 2
+        out.push({ a, spd: 0.55 + 0.75 * tri })
+      }
+      break
+    case 'ribbon':
+      for (let i = 0; i < 3; i++) out.push({ a: Math.PI / 2 + Math.sin(k * 0.17) * 1.15 + (i - 1) * 0.07, spd: 1.1 })
+      break
+    case 'curtain': {
+      const gap = Math.floor((Math.sin(k * 0.6) * 0.5 + 0.5) * 11)
+      for (let i = 0; i < 12; i++) if (Math.abs(i - gap) > 1) out.push({ a: Math.PI / 2, spd: 0.75, dx: (i / 11 - 0.5) * 400 })
+      break
+    }
     case 'flower':
       for (let i = 0; i < n; i++) {
         const p = (i / n) * TAU
