@@ -224,6 +224,11 @@ const engine: Engine = {
         const h = s.body[0]
         const cx = h.x * CELL + CELL / 2
         const cy = h.y * CELL + CELL / 2
+        // The game's own character rides the head (player 1); player 2 keeps classic eyes.
+        if (s === snakes[0]) {
+          emoji(ctx, t.hero, cx, cy, CELL * 1.05)
+          continue
+        }
         ctx.fillStyle = '#fff'
         for (const side of [-1, 1]) {
           const ex = cx + s.dir.x * 4 + s.dir.y * side * 4

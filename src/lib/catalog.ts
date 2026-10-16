@@ -1,6 +1,6 @@
 import { N } from '../i18n'
 import { ENGINES, type Control, type EngineId } from './engines'
-import { THEME_IDS, type ThemeId } from './themes'
+import { THEME_IDS, THEMES, type ThemeId } from './themes'
 
 export type Genre =
   | 'arcade' | 'puzzle' | 'action' | 'platformer' | 'shooter' | 'racing' | 'strategy' | 'simulation'
@@ -36,6 +36,8 @@ export interface Game {
   controls: Control[]
   /** Variant flags the engine reads (e.g. 'gravity', 'boss', 'versus'). */
   mods: string[]
+  /** The game's own character (emoji), named in the title or picked from its world. */
+  hero: string
   /** Hand-written plot (the game has a full story). */
   story: boolean
   seed: number
@@ -160,12 +162,32 @@ const THEME_RULES: [ThemeId, RegExp][] = [
   ['ninja', /ninja|samurai|kung|shogun|dojo|katana|japan/], ['dino', /dino|prehistoric|cave ?man|stone age|fossil|jurassic|mammoth/],
   ['robot', /robot|mech\b|mechs|android|drone|cyborg|bot\b|factory/], ['jungle', /jungle|safari|monkey|tiger|lion|rainforest|temple run|aztec|savanna/],
   ['arctic', /snow|\bice\b|icy|arctic|penguin|winter|frozen|ski|glacier|polar|sled/], ['steampunk', /steam|clockwork|\bgears?\b|airship|victorian|brass/],
-  ['hero', /superhero|hero\b|villain|caped|powers?\b/], ['candy', /candy|sweet|cake|food|cook|pizza|burger|donut|chef|bakery|fruit|kitchen|sushi/],
+  ['hero', /superhero|villain|caped|super ?powers?/], ['candy', /candy|sweet|cake|food|cook|pizza|burger|donut|chef|bakery|fruit|kitchen|sushi/],
   ['insects', /\bbugs?\b|insect|\bants?\b|\bbees?\b|spider|beetle|butterfl|firefl/], ['fantasy', /dragon|wizard|knight|castle|magic|spell|kingdom|elf|dwarf|sword|medieval|potion/],
   ['sports', /football|soccer|basket|baseball|sport|athlet|olympic|stadium|goal\b|golf|tennis|hockey/], ['school', /math|school|learn|educat|quiz|science|chem|physics|class/],
   ['cozy', /cozy|relax|tea\b|\bcats?\b|kitten|calm|knit|plant|flower|garden/], ['gems', /gem|jewel|crystal|diamond|ruby|treasure/],
   ['nature', /forest|animal|nature|tree|bird|fox|meadow|river|mountain|farm/], ['retro', /retro|8-bit|pixel|game ?boy|\bnes\b|arcade cabinet|crt|chiptune/],
   ['zen', /zen|minimal|monochrome|abstract|geometr/], ['neon', /neon|glow|laser|light ?cycle|synth/],
+]
+
+// Characters named in a game's title/description → its playable character.
+const HERO_RULES: [string, RegExp][] = [
+  ['🐧', /penguin/], ['🐻‍❄️', /polar bear/], ['🦭', /\bseal/], ['🐱', /\bcats?\b|kitten|kitty/], ['🐶', /\bdogs?\b|puppy|pup\b/], ['🦊', /\bfox/],
+  ['🐰', /bunny|rabbit|hare\b/], ['🐸', /\bfrog|toad/], ['🐢', /turtle|tortoise/], ['🐍', /\bsnake|serpent/], ['🐉', /dragon/], ['🦖', /\bt-?rex|raptor|dino/],
+  ['🐝', /\bbee/], ['🐜', /\bants?\b/], ['🐞', /ladybug|beetle/], ['🦋', /butterfl/], ['🐛', /caterpillar|\bworm/], ['🕷️', /spider/], ['🐌', /snail/],
+  ['🐟', /\bfish/], ['🐬', /dolphin/], ['🦈', /shark/], ['🐙', /octopus|kraken/], ['🦀', /\bcrab/], ['🐋', /whale/], ['🪼', /jellyfish/],
+  ['🐒', /monkey|ape\b|gorilla/], ['🐼', /panda/], ['🐨', /koala/], ['🦁', /\blion/], ['🐯', /tiger/], ['🐘', /elephant/], ['🦒', /giraffe/],
+  ['🦉', /\bowl/], ['🦅', /eagle|hawk|falcon/], ['🦆', /\bduck/], ['🐔', /chicken|hen\b|rooster/], ['🐦', /\bbird|sparrow/], ['🦜', /parrot/],
+  ['🐷', /\bpig/], ['🐮', /\bcow/], ['🐑', /sheep|lamb/], ['🐐', /\bgoat/], ['🐴', /horse|pony/], ['🦄', /unicorn/], ['🐭', /\bmouse\b|mice|\brat\b/],
+  ['🦔', /hedgehog/], ['🐿️', /squirrel/], ['🦇', /\bbats?\b|vampire bat/], ['🐺', /\bwol(f|ves)|werewolf/], ['🐻', /\bbears?\b/],
+  ['🥷', /ninja/], ['🧙', /wizard|mage|sorcer/], ['🧙‍♀️', /witch/], ['🛡️', /knight|paladin/], ['🧝', /\belf|elves/], ['🧚', /fairy|fairies/], ['🧛', /vampire/],
+  ['🧟', /zombie/], ['👻', /ghost|spirit|phantom/], ['💀', /skeleton|skull/], ['🎃', /pumpkin/], ['🤖', /robot|\bbot\b|android|droid/], ['👽', /alien|martian/],
+  ['🚀', /rocket|spaceship|starship/], ['🛸', /\bufo|saucer/], ['👩‍🚀', /astronaut|cosmonaut/], ['🏴‍☠️', /pirate|buccaneer/], ['🤠', /cowboy|sheriff|outlaw|gunslinger/],
+  ['🧜', /mermaid|merman/], ['🎅', /santa/], ['⛄', /snowman/], ['🦌', /reindeer|deer/], ['🧑‍🍳', /\bchef|cook\b|baker/], ['🧑‍🌾', /farmer/],
+  ['🕵️', /detective|spy\b|agent/], ['🦸', /superhero|hero\b/], ['🥋', /karate|kung.?fu|martial/], ['🥊', /boxer|boxing/], ['🏎️', /\bcar\b|racer|kart/],
+  ['🚁', /helicopter|chopper/], ['✈️', /\bplane|jet\b|pilot/], ['🚂', /\btrain|locomotive/], ['⛵', /\bboat|sail|ship\b/], ['🚲', /bike|bicycle/],
+  ['🛹', /skate/], ['🏄', /surf/], ['⛷️', /\bski/], ['🎈', /balloon/], ['🐲', /wyrm|drake/], ['🧞', /genie/], ['🤡', /clown|circus/], ['🧸', /teddy|toy/],
+  ['🍄', /mushroom/], ['🪲', /bug\b/], ['⚽', /football|soccer/], ['🏀', /basketball/], ['🎾', /tennis/], ['🐊', /crocodile|alligator/], ['🦕', /brontosaur|diplodoc/],
 ]
 
 // Variant flags engines can read.
@@ -230,12 +252,14 @@ export function classify(raw: RawGame): Game {
   const genre: Genre = story ? 'story' : themed || !strong ? ENGINE_GENRE[engine] ?? secGenre : secGenre
   const mods = MOD_RULES.filter(([, re]) => re.test(`${n} ${d}`)).map(([m]) => m)
   const h = hash(id)
+  const pool = THEMES[theme].heroes
+  const hero = match(HERO_RULES, n) ?? match(HERO_RULES, d) ?? pool[(h >>> 8) % pool.length]
   const difficulty: Difficulty = mods.includes('hard') ? 'hard' : mods.includes('zen') ? 'easy' : (['easy', 'normal', 'normal', 'hard'] as const)[h % 4]
   const meta = ENGINES[engine]
   const players: 1 | 2 = meta.players === 2 || (mods.includes('versus') && ['pong', 'fighter', 'board', 'snake', 'racer', 'tactics'].includes(engine)) ? 2 : 1
   return {
     id, slug: `${id}-${slugify(name)}`, name, dim: dim === 3 ? 3 : 2, desc, build, section, engine, theme, genre,
-    year: meta.year, difficulty, players, controls: meta.controls, mods, story, seed: h,
+    year: meta.year, difficulty, players, controls: meta.controls, mods, hero, story, seed: h,
   }
 }
 

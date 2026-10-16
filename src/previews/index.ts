@@ -23,7 +23,7 @@ export function drawPreview(canvas: HTMLCanvasElement, game: Game, dpr = Math.mi
   canvas.height = H * dpr
   const ctx = canvas.getContext('2d')!
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-  const t = THEMES[game.theme]
+  const t = { ...THEMES[game.theme], hero: game.hero }
   const r = makeRng(game.seed)
   const fn = byEngine.get(game.engine)
   try {

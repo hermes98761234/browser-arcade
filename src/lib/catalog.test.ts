@@ -50,3 +50,10 @@ describe('catalog', () => {
     expect(filtersToQuery(DEFAULT_FILTERS)).toBe('')
   })
 })
+
+describe('characters', () => {
+  it('gives games named after a creature that creature, and varied heroes overall', () => {
+    expect(games.find((g) => /penguin/i.test(g.name))!.hero).toBe('🐧')
+    expect(new Set(games.map((g) => g.hero)).size).toBeGreaterThan(80)
+  })
+})

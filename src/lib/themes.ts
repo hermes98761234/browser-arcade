@@ -13,8 +13,10 @@ export interface Theme {
   accent2: string
   danger: string
   good: string
-  /** Player character / avatar. */
+  /** Player character / avatar (each game picks its own from heroes, see catalog.ts). */
   hero: string
+  /** Pool of characters that fit this world. */
+  heroes: string[]
   /** Enemies / hazards. */
   foes: string[]
   /** Collectibles / tile symbols (at least 6). */
@@ -28,9 +30,11 @@ export type ThemeId =
   | 'horror' | 'myth' | 'ninja' | 'dino' | 'robot' | 'jungle' | 'arctic' | 'steampunk' | 'hero'
   | 'halloween' | 'holiday' | 'candy' | 'insects' | 'nature' | 'sports' | 'school' | 'cozy' | 'gems' | 'zen'
 
+const POOLS: Partial<Record<ThemeId, string>> = {"neon": "🟢🤖👾🦄🐸🐙", "retro": "🕹️👾🐸🍄🤖👻", "space": "🚀🛸👩\u200d🚀🧑\u200d🚀👽🛰️", "ocean": "🐠🐬🐢🐙🦭🐡", "fantasy": "🧙🧝🧚🦄🐉🤴", "pirate": "🏴\u200d☠️🦜⛵🧔🐒🦀", "western": "🤠🐎🦅🐂🌵🐍", "cyberpunk": "🦾🤖🕶️👩\u200d💻🧑\u200d🎤🐈\u200d⬛", "wasteland": "🧑\u200d🚒🐕🧟🚙🦂🐀", "horror": "🕯️👻🦇🐈\u200d⬛🧛💀", "myth": "🏛️🦉🦅🐎🧜🔱", "ninja": "🥷🐼🐉🦊🐒🏯", "dino": "🦖🦕🐊🦣🦤🦎", "robot": "🤖🦾🛰️🚜👾🦿", "jungle": "🐒🦜🐯🐘🦒🐸", "arctic": "🐧🐻\u200d❄️🦭🦊⛄🐋", "steampunk": "🎩🦉🐙🎈🤖🕰️", "hero": "🦸🦹🦸\u200d♀️🐺🦅🐆", "halloween": "🎃🧙\u200d♀️👻🦇🐈\u200d⬛🧟", "holiday": "🎅🦌⛄🧝🐧🤶", "candy": "🧁🍩🐻🐰🍓🐷", "insects": "🐞🐝🐜🦋🐛🐌", "nature": "🦊🐰🦔🐻🐿️🦉", "sports": "⚽🏃🏀🐎🚴🏄", "school": "🎓🦉🐶🐱🤓🧒", "cozy": "🐱🐶🐰🐹🦦🐼", "gems": "💎🐉🦄🧝👑🦊", "zen": "⚪🐢🐼🦢🐋🌸"}
+
 const T = (id: ThemeId, name: string, c: string[], hero: string, foes: string, items: string, blocks: string): Theme => ({
   id, name, bg: c[0], bg2: c[1], fg: c[2], accent: c[3], accent2: c[4], danger: c[5], good: c[6],
-  hero, foes: splitEmoji(foes), items: splitEmoji(items), blocks: blocks.split(' '),
+  hero, heroes: splitEmoji(POOLS[id] ?? hero), foes: splitEmoji(foes), items: splitEmoji(items), blocks: blocks.split(' '),
 })
 
 /** Split a string of emoji into grapheme clusters. */

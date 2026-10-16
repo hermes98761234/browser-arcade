@@ -29,7 +29,7 @@ export function Player({ game, t, lang }: { game: Game; t: T; lang: Lang }) {
   const [run, setRun] = useState(0)
   const { fav, best } = useStore()
   const meta = ENGINES[game.engine]
-  const theme = THEMES[game.theme]
+  const theme = useMemo(() => ({ ...THEMES[game.theme], hero: game.hero }), [game])
   const section = SECTIONS.find((s) => s.id === game.section)
 
   const stop = useCallback(() => {
