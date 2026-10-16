@@ -1,6 +1,8 @@
 // Roguelike: turn-based dungeon crawler with fog of war, themed foes, items, XP and depth as score; `stealth` swaps combat for guard patrols.
+// Variants from the game text (logic pickRogue): allies (healer / escort shrine / minions / pet), spell kits with mana, bow, dice combat, errands,
+// slayer contracts, turn timer, air meter, noise, cursed relics, unidentified potions, real-time, mimic chests, compass, one-room levels.
 import { Bag, byDiff, createStage, emoji, isTouch, keys, loop, makeRng, Particles, pointer, roundRect, Shake, text, vpad, type Engine } from '../kit'
-import { bfsField, canStep, computeFov, findPath, genLevel, los, type Level, type LevelKind } from '../logic/roguelike'
+import { bfsField, canStep, computeFov, findPath, genLevel, los, pickRogue, type Level } from '../logic/roguelike'
 
 type P = { x: number; y: number }
 
@@ -23,10 +25,19 @@ interface Mon {
   lost: number
   last: P | null
   flash: number
+  target?: boolean
 }
 
-type GroundKind = 'heal' | 'might' | 'tele' | 'fire' | 'map' | 'smoke' | 'weapon' | 'armor' | 'gold'
+type GroundKind = 'heal' | 'might' | 'tele' | 'fire' | 'map' | 'smoke' | 'weapon' | 'armor' | 'gold' | 'air' | 'relic' | 'parcel' | 'chest' | 'potion'
 interface Ground { x: number; y: number; kind: GroundKind; tier: number; amount: number }
+interface Ally { x: number; y: number; vx: number; vy: number; hp: number; max: number; face: string; kind: 'healer' | 'shrine' | 'minion' | 'pet'; life: number; cd: number }
+const SPELLS = {
+  wizard: [['🔥', 'Fire burst', 3], ['✨', 'Blink', 2], ['💚', 'Heal', 4]],
+  druid: [['🐻', 'Bear form', 3], ['🐺', 'Wolf dash', 2], ['🌿', 'Regrow', 4]],
+  necro: [['💀', 'Raise minion', 3], ['🩸', 'Drain life', 2], ['💚', 'Mend', 4]],
+} as const
+const RELICS = ['Crown of Might: +3 attack, -6 max HP', 'Vampire Fang: heal on kills, -4 max HP', 'Greedy Idol: double gold, foes wake up', 'Iron Mask: +2 defence, -2 attack', 'Glass Eye: see the whole map, -5 max HP']
+const CHESS_FOES = ['♟️', '♞', '♝', '♜', '♛']
 
 const CONS: Record<string, { emoji: string; glyph: string; name: string; color: string }> = {
   heal: { emoji: '🧪', glyph: '!', name: 'healing potion', color: '#ff6b81' },
@@ -35,21 +46,21 @@ const CONS: Record<string, { emoji: string; glyph: string; name: string; color: 
   fire: { emoji: '🔥', glyph: '?', name: 'scroll of fire', color: '#ff8c42' },
   map: { emoji: '🗺️', glyph: '?', name: 'scroll of mapping', color: '#b197fc' },
   smoke: { emoji: '💨', glyph: '*', name: 'smoke bomb', color: '#adb5bd' },
+  potion0: { emoji: '🧪', glyph: '!', name: 'red potion', color: '#ff6b81' },
+  potion1: { emoji: '🧪', glyph: '!', name: 'blue potion', color: '#74c0fc' },
+  potion2: { emoji: '🧪', glyph: '!', name: 'green potion', color: '#8ce99a' },
+  potion3: { emoji: '🧪', glyph: '!', name: 'yellow potion', color: '#ffe066' },
 }
 const WEAPONS = [['🗡️', 'dagger', 1], ['⚔️', 'sword', 3], ['🪓', 'axe', 5], ['🔱', 'trident', 8]] as const
 const ARMORS = [['🥋', 'padded vest', 1], ['🛡️', 'shield', 2], ['⛑️', 'plate armour', 4]] as const
-
-const ASCII_THEMES = new Set(['retro', 'school', 'cyberpunk', 'robot', 'neon'])
 
 const engine: Engine = {
   start(env) {
     const { theme: t, mods } = env
     const bag = new Bag()
-    const stealth = mods.has('stealth')
-    const dark = mods.has('dark') || /torch|dark|shadow/i.test(env.name)
-    const ascii = ASCII_THEMES.has(t.id) || /ascii|terminal|bash|command|mud|prompt|rogue-?terminal/i.test(env.name)
-    const kind: LevelKind = /labyrinth|maze|minos/i.test(env.name) ? 'maze' : /cave|catacomb|island|shipwreck|crypt|slime|spider|wasteland|bunker/i.test(env.name) ? 'cave' : 'bsp'
-    const endless = mods.has('endless') || mods.has('daily') || mods.has('climb')
+    const O = pickRogue(`${env.name} ${env.desc}`, mods, t.id)
+    const { stealth, dark, ascii, kind, endless } = O
+    const heroFace = O.chess ? '♚' : t.hero
     const goal = endless ? 999 : stealth ? byDiff(env, 6, 8, 10) : byDiff(env, 7, 10, 13)
     const baseSeed = mods.has('daily') ? Number(new Date().toISOString().slice(0, 10).replace(/-/g, '')) : env.seed
 
@@ -75,7 +86,8 @@ const engine: Engine = {
     bag.add(() => k.dispose())
     bag.add(() => ptr.dispose())
     bag.add(() => st.dispose())
-    bag.add(vpad(env.host, k, 'dpad', [{ action: 'a', label: '⏳' }, { action: 'b', label: stealth ? '💨' : '🧪' }]))
+    bag.add(vpad(env.host, k, 'dpad', [{ action: 'a', label: O.bow ? '🏹' : '⏳' }, { action: 'b', label: stealth ? (O.emp ? '⚡' : '💨') : '🧪' }]))
+    if (O.gb) st.canvas.style.filter = 'grayscale(1) sepia(1) hue-rotate(38deg) saturate(2.2) contrast(1.15)'
 
     // ---- state
     let depth = 1
@@ -88,6 +100,26 @@ const engine: Engine = {
     const hero = { x: 0, y: 0, vx: 0, vy: 0 }
     const pl = { hp: byDiff(env, 28, 20, 16), maxhp: byDiff(env, 28, 20, 16), atk: 2, def: 0, xp: 0, lvl: 1, weapon: -1, armor: -1, gold: 0, kills: 0, lives: 3 }
     const inv: { id: string; n: number }[] = []
+    const allies: Ally[] = []
+    const mana = { v: 12, max: 12 }
+    let air = 100
+    let turnsLeft = byDiff(env, 280, 230, 200)
+    let noise = 0
+    let rtT = 0
+    let parcelsLeft = 0
+    let targetAlive = false
+    let bearT = 0
+    let lifeSteal = 0
+    let goldMul = 1
+    const kit = O.spells ? SPELLS[O.spells] : null
+    const invCap = kit ? 3 : 6
+    const potionFx = rngShuffle(['heal', 'might', 'poison', 'tele'])
+    const potionKnown = [false, false, false, false]
+    function rngShuffle<T>(a: T[]): T[] {
+      const b = [...a]
+      for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(env.rng() * (i + 1)); [b[i], b[j]] = [b[j], b[i]] }
+      return b
+    }
     let log: { t: string; c: string }[] = []
     let turn = 0
     let regen = 0
@@ -114,14 +146,14 @@ const engine: Engine = {
 
     function hud() {
       env.score(depth * 100 + pl.kills * 5 + Math.floor(pl.gold / 5) + (stealth ? pl.lives * 25 : 0))
-      env.status(stealth ? `Floor ${depth} · ${'❤️'.repeat(Math.max(0, pl.lives))}` : `Depth ${depth} · HP ${Math.max(0, pl.hp)}/${pl.maxhp} · Lv ${pl.lvl}`)
+      env.status(stealth ? `Floor ${depth} · ${'❤️'.repeat(Math.max(0, pl.lives))}` : `Depth ${depth} · HP ${Math.max(0, pl.hp)}/${pl.maxhp} · Lv ${pl.lvl}${O.timer ? ` · ⏳${turnsLeft}` : ''}${O.air ? ` · 🫧${air}` : ''}${kit ? ` · MP ${mana.v}` : ''}`)
     }
 
     // ---- level setup
     function newLevel() {
       const lrng = makeRng((baseSeed * 2654435761 + depth * 40503) >>> 0)
-      const lw = 48 + Math.min(depth, 6) * 2
-      const lh = 30
+      const lw = kind === 'room' ? VW : 48 + Math.min(depth, 6) * 2
+      const lh = kind === 'room' ? VH : 30
       lv = genLevel(lrng, lw, lh, kind)
       explored = new Uint8Array(lv.w * lv.h)
       visible = new Uint8Array(lv.w * lv.h)
@@ -141,6 +173,8 @@ const engine: Engine = {
       mons = []
       ground = []
       travel = []
+      noise = 0
+      for (let i = allies.length - 1; i >= 0; i--) if (allies[i].kind === 'minion') allies.splice(i, 1)
       const dStart = bfsField(lv.tiles, lv.w, lv.h, lv.start.x, lv.start.y, 9999)
       const spots: P[] = []
       for (let i = 0; i < lv.tiles.length; i++) if (lv.tiles[i] && dStart[i] >= 7 && i !== at(lv.stairs.x, lv.stairs.y)) spots.push({ x: i % lv.w, y: Math.floor(i / lv.w) })
@@ -160,7 +194,33 @@ const engine: Engine = {
         else if (r < 0.72) g = { x: p.x, y: p.y, kind: 'armor', tier: Math.min(2, Math.floor((depth + lrng.int(0, 2)) / 4)), amount: 1 }
         else if (r < 0.77) g = { x: p.x, y: p.y, kind: 'might', tier: 0, amount: 1 }
         else g = { x: p.x, y: p.y, kind: 'gold', tier: 0, amount: lrng.int(4, 9) + depth * 3 }
+        if (O.unknown && (g.kind === 'heal' || g.kind === 'might')) g = { x: g.x, y: g.y, kind: 'potion', tier: lrng.int(0, 3), amount: 1 }
         ground.push(g)
+      }
+      if (O.errand) {
+        parcelsLeft = 2 + Math.floor(depth / 3)
+        for (let i = 0; i < parcelsLeft; i++) { const p = pick(); ground.push({ x: p.x, y: p.y, kind: 'parcel', tier: 0, amount: 1 }) }
+      } else parcelsLeft = 0
+      if (O.contract) {
+        const cand = mons.filter((m) => m.kind !== 'boss')
+        const m = cand[lrng.int(0, Math.max(0, cand.length - 1))]
+        if (m) { m.target = true; m.hp = m.maxhp = Math.round(m.maxhp * 2.5); m.atk = Math.round(m.atk * 1.3); m.xp *= 3; m.awake = true; targetAlive = true; m.face = t.foes[t.foes.length - 1] ?? m.face }
+      } else targetAlive = false
+      if (O.air) for (let i = 0; i < 3; i++) { const p = pick(); ground.push({ x: p.x, y: p.y, kind: 'air', tier: 0, amount: 40 }) }
+      if (O.relic && depth % 2 === 1) { const p = pick(); ground.push({ x: p.x, y: p.y, kind: 'relic', tier: lrng.int(0, RELICS.length - 1), amount: 1 }) }
+      if (O.chest) for (let i = 0; i < 6; i++) { const p = pick(); ground.push({ x: p.x, y: p.y, kind: 'chest', tier: 0, amount: 1 }) }
+      // persistent companions follow you down; minions do not
+      if (O.ally && O.ally !== 'minion') {
+        let a = allies.find((q) => q.kind === O.ally)
+        if (!a) {
+          const face = O.ally === 'shrine' ? '🏮' : (t.heroes.find((h) => h !== t.hero) ?? '🧑')
+          a = { x: 0, y: 0, vx: 0, vy: 0, hp: O.ally === 'shrine' ? 14 : 20, max: O.ally === 'shrine' ? 14 : 20, face, kind: O.ally, life: 9999, cd: 0 }
+          allies.push(a)
+        }
+        const sp = nearFree(hero.x, hero.y, 1)
+        a.x = a.vx = sp.x
+        a.y = a.vy = sp.y
+        if (O.ally === 'shrine') a.hp = Math.min(a.max, a.hp + 6)
       }
       refreshView()
       dist = bfsField(lv.tiles, lv.w, lv.h, hero.x, hero.y, 30)
@@ -172,7 +232,7 @@ const engine: Engine = {
 
     function populateMonsters(pick: () => P, crowd: number) {
       const n = Math.round((4 + depth * 1.3) * crowd)
-      const foes = t.foes.length ? t.foes : ['👾']
+      const foes = O.chess ? CHESS_FOES : t.foes.length ? t.foes : ['👾']
       for (let i = 0; i < n; i++) {
         const p = pick()
         const r = rng()
@@ -272,6 +332,8 @@ const engine: Engine = {
         pl.kills++
         pl.xp += m.xp
         say(`${src} destroyed the ${m.face}. (+${m.xp} xp)`, t.good)
+        if (lifeSteal && pl.hp < pl.maxhp) { pl.hp = Math.min(pl.maxhp, pl.hp + lifeSteal); float(hero.x, hero.y, `+${lifeSteal}`, t.good) }
+        if (m.target) { targetAlive = false; say('The contract is fulfilled! The stairs unseal.', t.accent) }
         fx.burst((m.x + 0.5) * T, (m.y + 0.5) * T, t.accent, 18, 200, 4)
         env.sfx('boom')
         shake.kick(3)
@@ -322,6 +384,7 @@ const engine: Engine = {
     function playerMove(dx: number, dy: number): boolean {
       if (over) return false
       if (dx === 0 && dy === 0) {
+        noise = Math.max(0, noise - 3)
         endTurn()
         return true
       }
@@ -349,10 +412,12 @@ const engine: Engine = {
             return true
           }
         } else {
-          const crit = rng.chance(0.1)
+          const roll = rng.int(1, 6)
+          const crit = O.dice ? roll === 6 : rng.chance(0.1)
           if (rng.chance(0.92)) {
-            const dmg = (pl.atk + weaponBonus() + rng.int(0, 2)) * (crit ? 2 : 1)
-            say(`You hit the ${m.face} for ${dmg}${crit ? ' (critical!)' : ''}.`, crit ? t.accent : t.fg)
+            const base = O.dice ? roll + Math.floor((pl.atk + weaponBonus()) / 2) + 1 : pl.atk + weaponBonus() + rng.int(0, 2)
+            const dmg = (base + (bearT > 0 ? 3 : 0)) * (crit ? 2 : 1)
+            say(`${O.dice ? `🎲${roll}: ` : ''}You hit the ${m.face} for ${dmg}${crit ? ' (critical!)' : ''}.`, crit ? t.accent : t.fg)
             env.sfx('hit')
             damageMon(m, dmg)
           } else {
@@ -367,23 +432,77 @@ const engine: Engine = {
       }
       hero.x = nx
       hero.y = ny
+      if (O.noise) noise = Math.min(7, noise + 2)
       pickup()
       if (nx === lv.stairs.x && ny === lv.stairs.y) {
+        if (stairsLocked()) {
+          say(parcelsLeft > 0 ? `Sealed: ${parcelsLeft} parcel${parcelsLeft > 1 ? 's' : ''} still to collect.` : 'The stairs are sealed until the contract target falls.', t.accent)
+          endTurn()
+          return true
+        }
         descend()
         return true
       }
       endTurn()
       return true
     }
+    const stairsLocked = () => parcelsLeft > 0 || targetAlive
 
     function pickup() {
       for (let i = ground.length - 1; i >= 0; i--) {
         const g = ground[i]
         if (g.x !== hero.x || g.y !== hero.y) continue
         if (g.kind === 'gold') {
-          pl.gold += g.amount
-          say(`You pick up ${g.amount} gold.`, t.accent)
-          float(hero.x, hero.y - 0.4, `+${g.amount}`, t.accent)
+          const amt = g.amount * goldMul
+          pl.gold += amt
+          say(`You pick up ${amt} gold.`, t.accent)
+          float(hero.x, hero.y - 0.4, `+${amt}`, t.accent)
+          env.sfx('point')
+          ground.splice(i, 1)
+        } else if (g.kind === 'air') {
+          air = Math.min(100, air + g.amount)
+          say('You breathe from an air bubble.', '#74c0fc')
+          float(hero.x, hero.y - 0.4, '+air', '#74c0fc')
+          env.sfx('point')
+          ground.splice(i, 1)
+        } else if (g.kind === 'parcel') {
+          parcelsLeft--
+          say(parcelsLeft > 0 ? `Parcel collected. ${parcelsLeft} to go.` : 'All parcels collected. The stairs unseal.', t.accent)
+          env.sfx('power')
+          ground.splice(i, 1)
+        } else if (g.kind === 'relic') {
+          takeRelic(g.tier)
+          ground.splice(i, 1)
+        } else if (g.kind === 'chest') {
+          ground.splice(i, 1)
+          if (rng.chance(0.35)) {
+            const sp = nearFree(g.x, g.y, 1)
+            const b = blank()
+            b.x = b.vx = sp.x
+            b.y = b.vy = sp.y
+            b.kind = 'brute'
+            b.hp = b.maxhp = Math.round((4 + depth * 2.4) * 2)
+            b.atk = Math.round(2 + depth * 1.2)
+            b.xp = 8 + depth * 2
+            b.face = '📦'
+            b.awake = true
+            mons.push(b)
+            say('The chest sprouts teeth. It is a mimic!', t.danger)
+            env.sfx('hit')
+          } else {
+            const amt = (6 + depth * 3 + rng.int(0, 8)) * goldMul
+            pl.gold += amt
+            if (rng.chance(0.4) && inv.length < invCap) inv.push({ id: O.unknown ? 'potion0' : 'heal', n: 1 })
+            say(`The chest holds ${amt} gold!`, t.accent)
+            env.sfx('power')
+          }
+        } else if (g.kind === 'potion') {
+          const id = `potion${g.tier}`
+          const have = inv.find((q) => q.id === id)
+          if (have) have.n++
+          else if (inv.length < invCap) inv.push({ id, n: 1 })
+          else { say('Your pack is full.', '#9aa'); continue }
+          say(`You pick up a ${CONS[id].name}.`, CONS[id].color)
           env.sfx('point')
           ground.splice(i, 1)
         } else if (g.kind === 'weapon') {
@@ -405,7 +524,7 @@ const engine: Engine = {
         } else {
           const have = inv.find((s) => s.id === g.kind)
           if (have) have.n++
-          else if (inv.length < 6) inv.push({ id: g.kind, n: 1 })
+          else if (inv.length < invCap) inv.push({ id: g.kind, n: 1 })
           else {
             say('Your pack is full.', '#9aa')
             continue
@@ -420,8 +539,28 @@ const engine: Engine = {
     function consumeItem(i: number) {
       const s = inv[i]
       if (!s || over) return
-      const id = s.id
+      let id = s.id
       let used = true
+      if (/^potion\d$/.test(id)) {
+        const n = Number(id.slice(6))
+        const fxk = potionFx[n]
+        const first = !potionKnown[n]
+        potionKnown[n] = true
+        CONS[id].name = `${fxk === 'heal' ? 'healing' : fxk === 'might' ? 'might' : fxk === 'poison' ? 'poison' : 'teleport'} potion`
+        if (first) say(`It was a ${CONS[id].name}!`, CONS[id].color)
+        if (fxk === 'poison') {
+          pl.hp -= 6
+          float(hero.x, hero.y, '-6', t.danger)
+          say('Poison! It burns going down.', t.danger)
+          env.sfx('hit')
+          if (pl.hp <= 0) die()
+          s.n--
+          if (s.n <= 0) inv.splice(i, 1)
+          if (!over) endTurn()
+          return
+        }
+        id = fxk
+      }
       if (id === 'heal') {
         if (pl.hp >= pl.maxhp) {
           say('You are already healthy.', '#9aa')
@@ -461,13 +600,13 @@ const engine: Engine = {
       } else if (id === 'smoke') {
         let n = 0
         for (const m of mons) {
-          if (Math.hypot(m.x - hero.x, m.y - hero.y) <= 4.5) {
+          if (O.emp || Math.hypot(m.x - hero.x, m.y - hero.y) <= 4.5) {
             m.st = 'stun'
-            m.stun = 7
+            m.stun = O.emp ? 10 : 7
             n++
           }
         }
-        say(n ? `Smoke blinds ${n} guard${n > 1 ? 's' : ''}.` : 'You release smoke. Nobody was near.', '#adb5bd')
+        say(O.emp ? 'The power cuts out: every camera and guard goes dark for a while.' : n ? `Smoke blinds ${n} guard${n > 1 ? 's' : ''}.` : 'You release smoke. Nobody was near.', '#adb5bd')
         fx.burst((hero.x + 0.5) * T, (hero.y + 0.5) * T, '#ccc', 26, 110, 6)
       }
       if (!used) return
@@ -477,8 +616,95 @@ const engine: Engine = {
       endTurn()
     }
 
+    function takeRelic(i: number) {
+      say(`Cursed relic! ${RELICS[i]}.`, t.accent)
+      env.sfx('power')
+      if (i === 0) { pl.atk += 3; pl.maxhp = Math.max(6, pl.maxhp - 6); pl.hp = Math.min(pl.hp, pl.maxhp) } else if (i === 1) { lifeSteal += 2; pl.maxhp = Math.max(6, pl.maxhp - 4); pl.hp = Math.min(pl.hp, pl.maxhp) } else if (i === 2) {
+        goldMul = 2
+        for (const m of mons) m.awake = true
+      } else if (i === 3) { pl.armor = Math.max(pl.armor, 2); pl.atk = Math.max(1, pl.atk - 2) } else { explored.fill(1); pl.maxhp = Math.max(6, pl.maxhp - 5); pl.hp = Math.min(pl.hp, pl.maxhp) }
+    }
+
+    // ---- spells (mana kits) and bow
+    function cast(i: number) {
+      if (!kit || over) return
+      const sp = kit[i]
+      if (mana.v < sp[2]) { say(`Not enough mana for ${sp[1]} (${sp[2]}).`, '#9aa'); return }
+      let ok = true
+      if (O.spells === 'wizard' && i === 0) {
+        let n = 0
+        refreshView()
+        for (const m of mons) if (m.hp > 0 && visible[at(m.x, m.y)] && Math.hypot(m.x - hero.x, m.y - hero.y) <= 5) { n++; damageMon(m, 5 + depth * 2, 'Your fire') }
+        say(n ? 'Flames burst from your hands!' : 'The flames find nothing.', '#ff8c42')
+        shake.kick(5)
+        env.sfx('boom')
+      } else if ((O.spells === 'wizard' || O.spells === 'druid') && i === 1) {
+        const c = nearFree(hero.x + rng.int(-5, 5), hero.y + rng.int(-5, 5), 1)
+        hero.x = hero.vx = c.x
+        hero.y = hero.vy = c.y
+        say(O.spells === 'druid' ? 'You dash as a wolf!' : 'You blink away.', '#74c0fc')
+        fx.burst((hero.x + 0.5) * T, (hero.y + 0.5) * T, '#74c0fc', 18, 150)
+        pickup()
+        if (hero.x === lv.stairs.x && hero.y === lv.stairs.y && !stairsLocked()) { descend(); mana.v -= sp[2]; return }
+      } else if (i === 2) {
+        const h = Math.round(pl.maxhp * 0.4) + 3
+        if (pl.hp >= pl.maxhp) { say('You are already healthy.', '#9aa'); ok = false } else {
+          pl.hp = Math.min(pl.maxhp, pl.hp + h)
+          float(hero.x, hero.y, `+${h}`, t.good)
+          say(`Healing light restores ${h} HP.`, t.good)
+          env.sfx('power')
+        }
+      } else if (O.spells === 'druid' && i === 0) {
+        bearT = 10
+        say('You take bear form: +3 damage for 10 turns.', t.accent)
+        env.sfx('power')
+      } else if (O.spells === 'necro' && i === 0) {
+        const c = nearFree(hero.x, hero.y, 1)
+        allies.push({ x: c.x, y: c.y, vx: hero.x, vy: hero.y, hp: 8 + depth * 2, max: 8 + depth * 2, face: '💀', kind: 'minion', life: 30, cd: 0 })
+        say('A skeleton claws out of the floor.', t.accent)
+        env.sfx('power')
+      } else if (O.spells === 'necro' && i === 1) {
+        const tg = nearestVisible(7)
+        if (!tg) { say('No target to drain.', '#9aa'); ok = false } else {
+          const d = 6 + depth
+          damageMon(tg, d, 'Your drain')
+          pl.hp = Math.min(pl.maxhp, pl.hp + Math.ceil(d / 2))
+          shots.push({ x0: hero.x, y0: hero.y, x1: tg.x, y1: tg.y, life: 0.25 })
+        }
+      }
+      if (!ok) return
+      mana.v -= sp[2]
+      endTurn()
+    }
+    function nearestVisible(range: number): Mon | null {
+      let best: Mon | null = null
+      let bd = 99
+      for (const m of mons) {
+        if (m.hp <= 0 || !visible[at(m.x, m.y)]) continue
+        const d = Math.hypot(m.x - hero.x, m.y - hero.y)
+        if (d <= range && d < bd && los(lv.tiles, lv.w, hero.x, hero.y, m.x, m.y)) { bd = d; best = m }
+      }
+      return best
+    }
+    function shoot(target?: Mon | null) {
+      if (over) return
+      const m = target && target.hp > 0 && visible[at(target.x, target.y)] ? target : nearestVisible(7)
+      if (!m) { say('Nothing to shoot.', '#9aa'); return }
+      shots.push({ x0: hero.x, y0: hero.y, x1: m.x, y1: m.y, life: 0.2 })
+      env.sfx('shoot')
+      if (rng.chance(0.85)) {
+        const dmg = pl.atk + weaponBonus() + rng.int(1, 3) + (bearT > 0 ? 3 : 0)
+        say(`Your arrow hits the ${m.face} for ${dmg}.`, t.fg)
+        damageMon(m, dmg)
+      } else {
+        say('Your arrow misses.', '#9aa')
+        float(m.x, m.y, 'miss', '#aaa')
+      }
+      endTurn()
+    }
+
     function quick() {
-      const i = inv.findIndex((s) => s.id === (stealth ? 'smoke' : 'heal'))
+      const i = inv.findIndex((s) => s.id === (stealth ? 'smoke' : 'heal') || (O.unknown && !stealth && /^potion\d$/.test(s.id) && potionKnown[Number(s.id.slice(6))] && potionFx[Number(s.id.slice(6))] === 'heal'))
       if (i >= 0) consumeItem(i)
       else say(stealth ? 'No smoke bombs.' : 'No healing potions.', '#9aa')
     }
@@ -490,6 +716,8 @@ const engine: Engine = {
         return
       }
       depth++
+      if (O.timer) turnsLeft += 70
+      if (O.air) air = Math.min(100, air + 30)
       say(`You descend to depth ${depth}.`, t.accent)
       if (!stealth) {
         pl.hp = Math.min(pl.maxhp, pl.hp + 2)
@@ -509,19 +737,90 @@ const engine: Engine = {
     let winFlag = false
 
     // ---- monsters
-    function endTurn() {
+    function endTurn(timerTick = false) {
+      if (O.rt && !timerTick) {
+        refreshView()
+        dist = bfsField(lv.tiles, lv.w, lv.h, hero.x, hero.y, 30)
+        hud()
+        return
+      }
       turn++
       refreshView()
       if (!stealth && ++regen >= 9 && pl.hp < pl.maxhp) {
         pl.hp++
         regen = 0
       }
+      if (kit && turn % 3 === 0 && mana.v < mana.max) mana.v++
+      if (bearT > 0) bearT--
+      if (O.timer && --turnsLeft <= 0 && !over) { say('Time runs out!', t.danger); die(); return }
+      if (O.air && !over) {
+        air = Math.max(0, air - 2)
+        if (air === 0) hurtPlayer(2, 'The water')
+        if (over) return
+      }
       dist = bfsField(lv.tiles, lv.w, lv.h, hero.x, hero.y, 30)
+      alliesAct()
       if (stealth) guardsAct()
       else monstersAct()
+      if (O.noise && noise > 0 && !over) noise = Math.max(0, noise - 1)
       refreshView()
       if (stealth) computeCones()
       hud()
+    }
+
+    function alliesAct() {
+      for (let i = allies.length - 1; i >= 0; i--) {
+        const a = allies[i]
+        if (a.hp <= 0) continue
+        if (a.kind === 'minion' && --a.life <= 0) { allies.splice(i, 1); continue }
+        const foe = mons.find((m) => m.hp > 0 && Math.max(Math.abs(m.x - a.x), Math.abs(m.y - a.y)) <= 1 && canStep(lv.tiles, lv.w, a.x, a.y, m.x - a.x, m.y - a.y))
+        if (a.kind === 'healer') {
+          a.cd--
+          if (a.cd <= 0 && pl.hp < pl.maxhp * 0.6) {
+            const h = 4 + Math.floor(depth / 2)
+            pl.hp = Math.min(pl.maxhp, pl.hp + h)
+            a.cd = 5
+            float(hero.x, hero.y, `+${h}`, t.good)
+            say(`${a.face} heals you for ${h}.`, t.good)
+            fx.burst((hero.x + 0.5) * T, (hero.y + 0.5) * T, t.good, 10, 90)
+          }
+        }
+        if (foe && (a.kind === 'healer' || a.kind === 'minion' || a.kind === 'pet')) {
+          const d = a.kind === 'pet' ? 2 + Math.floor(depth / 2) + 1 : a.kind === 'minion' ? 2 + Math.floor(depth / 2) : 1 + Math.floor(depth / 3)
+          damageMon(foe, d, `${a.face}`)
+          a.vx += (foe.x - a.x) * 0.3
+          a.vy += (foe.y - a.y) * 0.3
+          continue
+        }
+        if (a.kind === 'shrine' && turn % 2) continue
+        // follow the hero
+        const d0 = dist[at(a.x, a.y)]
+        if (d0 > 1 || d0 < 0) {
+          let best: P | null = null
+          let bd = d0 < 0 ? 9999 : d0
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+            if (!canStep(lv.tiles, lv.w, a.x, a.y, dx, dy)) continue
+            const nx = a.x + dx
+            const ny = a.y + dy
+            if (monAt(nx, ny) || (nx === hero.x && ny === hero.y) || allies.some((q) => q !== a && q.x === nx && q.y === ny && q.hp > 0)) continue
+            const dd = dist[at(nx, ny)]
+            if (dd >= 0 && dd < bd) { bd = dd; best = { x: nx, y: ny } }
+          }
+          if (best) { a.x = best.x; a.y = best.y }
+        }
+      }
+    }
+    function hurtAlly(a: Ally, dmg: number, who: string) {
+      a.hp -= dmg
+      float(a.x, a.y, `-${dmg}`, t.danger)
+      env.sfx('hit')
+      if (a.hp <= 0) {
+        say(`${who} destroys ${a.face}.`, t.danger)
+        fx.burst((a.x + 0.5) * T, (a.y + 0.5) * T, t.danger, 14, 140)
+        if (a.kind === 'shrine' || a.kind === 'healer') { say(a.kind === 'shrine' ? 'The light shrine goes out. The pilgrimage fails.' : 'Your companion falls.', t.danger); if (a.kind === 'shrine') die() }
+        const i = allies.indexOf(a)
+        if (i >= 0 && a.kind !== 'shrine') allies.splice(i, 1)
+      }
     }
 
     function stepMon(m: Mon, field: Int16Array, away = false) {
@@ -573,6 +872,15 @@ const engine: Engine = {
           continue
         }
         const adj = Math.max(Math.abs(m.x - hero.x), Math.abs(m.y - hero.y)) <= 1 && canStep(lv.tiles, lv.w, m.x, m.y, hero.x - m.x, hero.y - m.y)
+        if (!adj && allies.length) {
+          const al = allies.find((q) => q.hp > 0 && Math.max(Math.abs(m.x - q.x), Math.abs(m.y - q.y)) <= 1 && canStep(lv.tiles, lv.w, m.x, m.y, q.x - m.x, q.y - m.y))
+          if (al) {
+            if (rng.chance(0.8)) hurtAlly(al, Math.max(1, m.atk + rng.int(-1, 0)), `The ${m.face}`)
+            m.flash = 0.1
+            if (over) return
+            continue
+          }
+        }
         if (m.kind === 'archer') {
           const clear = d <= 7 && los(lv.tiles, lv.w, m.x, m.y, hero.x, hero.y)
           if (clear && d >= 2) {
@@ -653,7 +961,8 @@ const engine: Engine = {
           continue
         }
         // detection
-        const sees = grace === 0 && inCone(g, hero.x, hero.y, 7)
+        const heard = O.noise && noise > 0 && Math.hypot(g.x - hero.x, g.y - hero.y) <= noise + 1
+        const sees = grace === 0 && (inCone(g, hero.x, hero.y, 7) || heard)
         const near = Math.max(Math.abs(g.x - hero.x), Math.abs(g.y - hero.y)) <= 1
         if (sees || (near && grace === 0)) {
           g.sus++
@@ -730,8 +1039,12 @@ const engine: Engine = {
         travel = []
         playerMove(diag[c][0], diag[c][1])
       } else if (c === 'Period' || c === 'Numpad5') playerMove(0, 0)
-      else if (/^Digit[1-6]$/.test(c)) consumeItem(Number(c.slice(5)) - 1)
-      else if (c === 'KeyQ') quick()
+      else if (/^Digit[1-6]$/.test(c)) {
+        const n = Number(c.slice(5)) - 1
+        if (kit && n < 3) cast(n)
+        else consumeItem(n - (kit ? 3 : 0))
+      } else if (c === 'KeyQ') quick()
+      else if (c === 'KeyF' && O.bow) shoot()
     })
 
     function tapAt(x: number, y: number) {
@@ -739,7 +1052,8 @@ const engine: Engine = {
       // inventory slots
       const slot = slotAt(x, y)
       if (slot >= 0) {
-        consumeItem(slot)
+        if (kit && slot < 3) cast(slot)
+        else consumeItem(slot - (kit ? 3 : 0))
         return
       }
       if (y < TOP || y > TOP + VH * T) return
@@ -751,6 +1065,10 @@ const engine: Engine = {
       if (dx === 0 && dy === 0) {
         playerMove(0, 0)
         return
+      }
+      if (O.bow) {
+        const tm = monAt(tx, ty)
+        if (tm && visible[at(tx, ty)] && Math.max(Math.abs(dx), Math.abs(dy)) > 1) { travel = []; shoot(tm); return }
       }
       if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) {
         travel = []
@@ -773,7 +1091,8 @@ const engine: Engine = {
       return { x: W - 10 - (6 - i) * (sw + gap) + gap, y: H - PANEL + 38, w: sw, h: sw }
     }
     const slotAt = (x: number, y: number) => {
-      for (let i = 0; i < inv.length; i++) {
+      const n = (kit ? 3 : 0) + inv.length
+      for (let i = 0; i < n; i++) {
         const r = slotRect(i)
         if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return i
       }
@@ -831,8 +1150,12 @@ const engine: Engine = {
           }
           lastDir = key
         } else lastDir = ''
-        if (k.hit('a')) playerMove(0, 0)
+        if (k.hit('a')) { if (O.bow) shoot(); else playerMove(0, 0) }
         if (k.hit('b')) quick()
+        if (O.rt) {
+          rtT += dt
+          if (rtT >= 0.6) { rtT = 0; endTurn(true) }
+        }
         // travel
         if (travel.length) {
           travelT -= dt
@@ -921,7 +1244,7 @@ const engine: Engine = {
               else {
                 ctx.fillStyle = 'rgba(0,0,0,0.5)'
                 ctx.fillRect(X + 3, Y + 3, T - 6, T - 6)
-                emoji(ctx, '🪜', X + T / 2, Y + T / 2, 24)
+                emoji(ctx, stairsLocked() ? '🔒' : '🪜', X + T / 2, Y + T / 2, 24)
               }
             }
             if (cones[i] && vis) {
@@ -949,10 +1272,11 @@ const engine: Engine = {
         const X = px(g.x) + T / 2
         const Y = py(g.y) + T / 2 + Math.sin(time * 3 + g.x) * 1.5
         if (ascii) {
-          const gl = g.kind === 'gold' ? '$' : g.kind === 'weapon' ? '/' : g.kind === 'armor' ? '[' : CONS[g.kind].glyph
-          text(ctx, gl, X, Y, { size: 24, color: g.kind === 'gold' ? t.accent : g.kind === 'weapon' || g.kind === 'armor' ? t.accent2 : CONS[g.kind].color, font: 'ui-monospace, monospace', weight: 800 })
+          const special = g.kind === 'air' ? 'o' : g.kind === 'parcel' ? '=' : g.kind === 'relic' ? '&' : g.kind === 'chest' ? '~' : ''
+          const gl = special || (g.kind === 'gold' ? '$' : g.kind === 'weapon' ? '/' : g.kind === 'armor' ? '[' : g.kind === 'potion' ? '!' : CONS[g.kind].glyph)
+          text(ctx, gl, X, Y, { size: 24, color: g.kind === 'gold' || special ? t.accent : g.kind === 'weapon' || g.kind === 'armor' ? t.accent2 : g.kind === 'potion' ? CONS[`potion${g.tier}`].color : CONS[g.kind].color, font: 'ui-monospace, monospace', weight: 800 })
         } else {
-          const e = g.kind === 'gold' ? '💰' : g.kind === 'weapon' ? WEAPONS[g.tier][0] : g.kind === 'armor' ? ARMORS[g.tier][0] : CONS[g.kind].emoji
+          const e = g.kind === 'gold' ? '💰' : g.kind === 'weapon' ? WEAPONS[g.tier][0] : g.kind === 'armor' ? ARMORS[g.tier][0] : g.kind === 'air' ? '🫧' : g.kind === 'parcel' ? '✉️' : g.kind === 'relic' ? '🏺' : g.kind === 'chest' ? '📦' : g.kind === 'potion' ? '🧪' : CONS[g.kind].emoji
           ctx.shadowColor = t.accent
           ctx.shadowBlur = 8
           emoji(ctx, e, X, Y, 22)
@@ -982,6 +1306,33 @@ const engine: Engine = {
         if (stealth && m.st === 'sus') text(ctx, '?', X, Y - 20, { size: 16, color: t.accent })
         if (m.st === 'chase') text(ctx, '!', X, Y - 20, { size: 16, color: t.danger })
         if (m.st === 'stun') text(ctx, 'z', X + 10, Y - 14, { size: 12, color: '#aab' })
+        if (m.target) text(ctx, '🎯', X, Y - 22, { size: 16, color: t.danger })
+      }
+      // allies
+      for (const a of allies) {
+        if (a.hp <= 0 || !visible[at(Math.round(a.x), Math.round(a.y))]) continue
+        a.vx += (a.x - a.vx) * 0.25
+        a.vy += (a.y - a.vy) * 0.25
+        const X = px(a.vx) + T / 2
+        const Y = py(a.vy) + T / 2
+        if (ascii) text(ctx, a.kind === 'shrine' ? '*' : 'a', X, Y, { size: 26, color: t.good, font: 'ui-monospace, monospace', weight: 800 })
+        else {
+          ctx.shadowColor = t.good
+          ctx.shadowBlur = a.kind === 'shrine' ? 18 : 8
+          emoji(ctx, a.face, X, Y - 2, a.kind === 'shrine' ? 28 : 24)
+          ctx.shadowBlur = 0
+        }
+        ctx.fillStyle = '#040'
+        ctx.fillRect(X - 11, Y + 13, 22, 3)
+        ctx.fillStyle = t.good
+        ctx.fillRect(X - 11, Y + 13, 22 * Math.max(0, a.hp / a.max), 3)
+      }
+      if (O.noise && noise > 0) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.35)'
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.arc(px(hero.vx) + T / 2, py(hero.vy) + T / 2, (noise + 1) * T, 0, 7)
+        ctx.stroke()
       }
       // hero
       {
@@ -995,7 +1346,7 @@ const engine: Engine = {
           ctx.fill()
           ctx.shadowColor = t.accent
           ctx.shadowBlur = 14
-          emoji(ctx, t.hero, X, Y - 1 + Math.sin(time * 3) * 1, 28)
+          emoji(ctx, heroFace, X, Y - 1 + Math.sin(time * 3) * 1, 28)
           ctx.shadowBlur = 0
         }
       }
@@ -1045,6 +1396,40 @@ const engine: Engine = {
         text(ctx, '❤️'.repeat(Math.max(0, pl.lives)), W / 2, 21, { size: 18, color: t.danger })
         text(ctx, `💰${pl.gold}`, W - 60, 21, { size: 13, color: t.fg, font: mono })
       }
+      if (kit) {
+        const mx = portrait ? 262 : 380
+        const my = portrait ? 16 : 29
+        const mw = portrait ? 70 : 120
+        ctx.fillStyle = '#123'
+        ctx.fillRect(mx, my, mw, portrait ? 8 : 6)
+        ctx.fillStyle = '#4dabf7'
+        ctx.fillRect(mx, my, mw * (mana.v / mana.max), portrait ? 8 : 6)
+        text(ctx, `MP ${mana.v}`, mx + mw + 22, my + 4, { size: 10, color: '#9cf', font: mono })
+      }
+      // variant readouts on the map
+      {
+        const ex: string[] = []
+        if (O.timer) ex.push(`⏳ ${turnsLeft}`)
+        if (O.air) ex.push(`🫧 ${air}%`)
+        if (parcelsLeft > 0) ex.push(`✉️ ${parcelsLeft}`)
+        if (targetAlive) ex.push('🎯 target')
+        if (bearT > 0) ex.push(`🐻 ${bearT}`)
+        if (O.noise) ex.push(`🔊 ${noise}`)
+        if (O.compass) {
+          let bd = 1e9
+          let bx = lv.stairs.x
+          let by = lv.stairs.y
+          for (const g of ground) if (g.kind === 'gold' || g.kind === 'chest' || g.kind === 'relic') { const d = Math.hypot(g.x - hero.x, g.y - hero.y); if (d < bd) { bd = d; bx = g.x; by = g.y } }
+          const a = Math.atan2(by - hero.y, bx - hero.x)
+          const arrows = ['→', '↘', '↓', '↙', '←', '↖', '↑', '↗']
+          ex.push(`🧭 ${arrows[(Math.round(a / (Math.PI / 4)) + 8) % 8]} ${Math.round(Math.min(bd, Math.hypot(bx - hero.x, by - hero.y)))}`)
+        }
+        if (ex.length) {
+          const label = ex.join('   ')
+          roundRect(ctx, 8, TOP + 6, Math.min(W - 16, 18 + label.length * 8), 24, 12, 'rgba(0,0,0,0.65)')
+          text(ctx, label, 16, TOP + 18, { size: 13, color: t.fg, align: 'left', font: mono })
+        }
+      }
       // bottom panel
       const py0 = H - PANEL - PAD
       ctx.fillStyle = 'rgba(0,0,0,0.82)'
@@ -1070,8 +1455,20 @@ const engine: Engine = {
       // inventory
       for (let i = 0; i < 6; i++) {
         const r = slotRect(i)
-        roundRect(ctx, r.x, r.y, r.w, r.h, 8, 'rgba(255,255,255,0.07)', i < inv.length ? t.accent : 'rgba(255,255,255,0.2)', 1.5)
-        const s = inv[i]
+        roundRect(ctx, r.x, r.y, r.w, r.h, 8, 'rgba(255,255,255,0.07)', kit && i < 3 ? t.accent2 : i - (kit ? 3 : 0) < inv.length ? t.accent : 'rgba(255,255,255,0.2)', 1.5)
+        const off = kit ? 3 : 0
+        if (kit && i < 3) {
+          const sp = kit[i]
+          const ready = mana.v >= sp[2]
+          ctx.globalAlpha = ready ? 1 : 0.4
+          if (ascii) text(ctx, sp[1][0].toUpperCase(), r.x + r.w / 2, r.y + r.h / 2 - 3, { size: 24, color: t.accent2, font: 'ui-monospace, monospace' })
+          else emoji(ctx, sp[0], r.x + r.w / 2, r.y + r.h / 2 - 3, 22)
+          text(ctx, `${sp[2]}mp`, r.x + r.w / 2, r.y + r.h - 6, { size: 9, color: '#9cf' })
+          ctx.globalAlpha = 1
+          text(ctx, String(i + 1), r.x + 6, r.y + 8, { size: 9, color: 'rgba(255,255,255,0.5)', align: 'left' })
+          continue
+        }
+        const s = inv[i - off]
         if (s) {
           if (ascii) text(ctx, CONS[s.id].glyph, r.x + r.w / 2, r.y + r.h / 2, { size: 26, color: CONS[s.id].color, font: 'ui-monospace, monospace' })
           else emoji(ctx, CONS[s.id].emoji, r.x + r.w / 2, r.y + r.h / 2, 24)
@@ -1082,7 +1479,10 @@ const engine: Engine = {
       // hint
       if (time < 6 && !over) {
         ctx.globalAlpha = Math.min(1, (6 - time) / 1.5)
-        const msg = stealth ? 'Avoid the red/yellow cones · slip behind guards to take them down · reach the exit' : 'Move: arrows / WASD / tap · bump to attack · find the stairs'
+        const msg = stealth ? (O.noise ? 'Every step makes noise (circle) · wait to stay quiet · reach the exit' : 'Avoid the red/yellow cones · slip behind guards to take them down · reach the exit')
+          : kit ? `Spells 1-3 (${kit.map((q) => q[1]).join(', ')}) · bump to attack · find the stairs`
+            : O.bow ? 'Tap an enemy or press F to shoot · move with arrows / tap · find the stairs'
+              : O.errand ? 'Collect every parcel, then take the stairs' : O.contract ? 'Kill the marked target to unseal the stairs' : O.ally ? 'Your companion follows and helps · find the stairs' : 'Move: arrows / WASD / tap · bump to attack · find the stairs'
         roundRect(ctx, W / 2 - 230, TOP + 8, 460, 26, 13, 'rgba(0,0,0,0.7)')
         text(ctx, msg, W / 2, TOP + 21, { size: portrait ? 10 : 11, color: t.fg })
         ctx.globalAlpha = 1

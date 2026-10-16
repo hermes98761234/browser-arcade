@@ -64,6 +64,7 @@ const BG: Record<string, string> = {
   sea: 'linear-gradient(#7dd3fc,#38bdf8 55%,#0369a1 56%)',
   space: 'linear-gradient(#020617,#1e1b4b)',
   waste: 'linear-gradient(#a8a29e,#d6b88a 60%,#78716c 61%)',
+  arctic: 'linear-gradient(#bae6fd,#f0f9ff 60%,#e0f2fe 61%)',
 }
 
 const engine: Engine = {
@@ -144,7 +145,7 @@ const engine: Engine = {
     bg.style.backgroundPosition = '0 0,40px 30px'
     el('span', '', th.hero, scene)
     el('span', 'v', fl.vEmoji, scene)
-    el('span', '', kind === 'sea' ? '🌊' : kind === 'space' ? '✨' : kind === 'desert' ? '🌵' : kind === 'waste' ? '☢️' : '🌲', scene)
+    el('span', '', kind === 'sea' ? '🌊' : kind === 'space' ? '✨' : kind === 'desert' ? '🌵' : kind === 'waste' ? '☢️' : kind === 'arctic' ? '❄️' : '🌲', scene)
     const partyBox = el('div', 'party', '', w)
     const memUi = party.map((m) => {
       const c = el('div', 'mem', '', partyBox)

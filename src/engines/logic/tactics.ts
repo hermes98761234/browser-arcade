@@ -174,3 +174,80 @@ export function moveDamage(a: Creature, d: Creature, m: Move, rand: number): num
   const stab = m.type === a.type ? 1.2 : 1
   return Math.max(1, Math.floor(m.power * (a.atk / d.def) * 0.32 * (0.85 + rand * 0.3) * mult * stab))
 }
+
+// ---------- mode + rule selection ----------
+export type TacKind = 'classic' | 'auto' | 'creature'
+export type Rule = 'weather' | 'tide' | 'cold' | 'zone' | 'high' | 'xcom' | 'overwatch' | 'rewind' | 'hold' | 'bridge' | 'artillery' | 'merc' | 'gears' | 'initiative' | 'guard'
+
+export interface TacPick { kind: TacKind; rules: Set<Rule>; collect: boolean }
+
+export function pickTactics(info: string, mods: ReadonlySet<string>): TacPick {
+  const s = info.toLowerCase()
+  const rules = new Set<Rule>()
+  if (/\bweather|monsoon|\bfronts?\b/.test(s)) rules.add('weather')
+  if (/tide|tides/.test(s)) rules.add('tide')
+  if (/cold|frost|winter|snow/.test(s)) rules.add('cold')
+  if (/shrinking|light radius/.test(s)) rules.add('zone')
+  if (/high ground|cliff|vertical|rooftop|\bridge\b/.test(s)) rules.add('high')
+  if (/cover|flank|xcom/.test(s)) rules.add('xcom')
+  if (/overwatch/.test(s)) rules.add('overwatch')
+  if (/rewind/.test(s)) rules.add('rewind')
+  if (/last stand|hold position|wave assault/.test(s)) rules.add('hold')
+  if (/shieldwall|narrow bridges|formation push/.test(s)) rules.add('bridge')
+  if (/artillery|lob shells/.test(s)) rules.add('artillery')
+  if (/mercenary|hire squads|upkeep/.test(s)) rules.add('merc')
+  if (/gear cycles|clockwork/.test(s)) rules.add('gears')
+  if (/initiative/.test(s)) rules.add('initiative')
+  if (/stance/.test(s)) rules.add('guard')
+  const autoWords = /\bauto\b|autom|draft|lineup|bench|brawl|arena|roster|synerg|\bshop\b|league|melee/i.test(info) || mods.has('auto')
+  const creature = !rules.size && !autoWords && /creature|monster|critter|cryptid|\bpets?\b|\bpals\b|kaiju|slime|wisps?|spirit|hatchery|fossil|coral kin|glitch|beast/i.test(info)
+  const auto = !creature && !rules.size && (autoWords || /formations? auto/i.test(info))
+  const collect = creature && /collect|befriend|hatch|revive|pals|pets|field guide|kindergarten|breed|raise|fuse|photograph|debug|symbiosis|wisps|slime/.test(s)
+  return { kind: creature ? 'creature' : auto ? 'auto' : 'classic', rules, collect }
+}
+
+/** Water band across the middle with two narrow bridges (shieldwall maps). */
+export function genBridge(rng: Rng, cols: number, rows: number): Terrain[] {
+  const t: Terrain[] = Array(cols * rows).fill(0)
+  const axisLong = cols >= rows
+  const long = axisLong ? cols : rows
+  const short = axisLong ? rows : cols
+  const mid = Math.floor(long / 2)
+  const b1 = Math.floor(short * 0.25)
+  const b2 = Math.floor(short * 0.75)
+  for (let a = 0; a < long; a++) for (let b = 0; b < short; b++) {
+    const c = axisLong ? a : b
+    const r = axisLong ? b : a
+    const i = r * cols + c
+    if (a === mid - 1 || a === mid) { t[i] = b === b1 || b === b2 ? 0 : 2; continue }
+    if (a >= 2 && a < long - 2 && rng.chance(0.1)) t[i] = 1
+  }
+  return t
+}
+
+/** Class names per theme keyword (warrior, archer, healer, mage, knight, rogue). */
+export const LABELS: { re: RegExp; names: [string, string, string, string, string, string] }[] = [
+  { re: /chess|pawn/i, names: ['Pawn', 'Bishop', 'Rook', 'Queen', 'Knight', 'Jester'] },
+  { re: /fruit|juic/i, names: ['Melon', 'Cherry', 'Orange', 'Grape', 'Coconut', 'Chili'] },
+  { re: /toy|puppet|paper|marionette|origami|wind-up/i, names: ['Tin Soldier', 'Dart Gun', 'Teddy', 'Jack-in-Box', 'Block Knight', 'Marble'] },
+  { re: /bug|insect|microbe|cell|ant\b/i, names: ['Beetle', 'Spitter', 'Nurse Bee', 'Stinger', 'Rhino', 'Mantis'] },
+  { re: /snack|junk food|kitchen|burger/i, names: ['Burger', 'Fry Slinger', 'Milk Carton', 'Hot Sauce', 'Pizza Knight', 'Taco Rogue'] },
+  { re: /robot|mech|clockwork|rumble/i, names: ['Brawler Bot', 'Turret', 'Repair Drone', 'Arc Caster', 'Heavy Mech', 'Stealth Unit'] },
+  { re: /dino|raptor|dragon/i, names: ['Raptor', 'Spitter', 'Nurturer', 'Fire Breather', 'Armored Beast', 'Pouncer'] },
+  { re: /undead|skeleton|lich|crypt/i, names: ['Skeleton', 'Bone Archer', 'Ghoul', 'Lich', 'Death Knight', 'Wraith'] },
+  { re: /pirate|crew/i, names: ['Deckhand', 'Gunner', 'Surgeon', 'Cannoneer', 'Bosun', 'Cutthroat'] },
+  { re: /space|fleet|starfall|squadron/i, names: ['Frigate', 'Lancer', 'Repair Tender', 'Missile Boat', 'Battleship', 'Stealth Skiff'] },
+  { re: /wizard|mage|magic|witch/i, names: ['Battle Mage', 'Wand Archer', 'Cleric', 'Archmage', 'Rune Knight', 'Shade'] },
+  { re: /samurai|shogun|ronin|ninja|sengoku/i, names: ['Ashigaru', 'Yumi Archer', 'Monk', 'Onmyoji', 'Samurai', 'Ninja'] },
+  { re: /western|sheriff|cowboy|standoff|frontier/i, names: ['Deputy', 'Rifleman', 'Doc', 'Dynamite Man', 'Marshal', 'Outlaw'] },
+  { re: /cactus|desert/i, names: ['Cactus Bruiser', 'Thorn Archer', 'Aloe Healer', 'Mirage Mage', 'Armadillo', 'Scorpion'] },
+  { re: /myth|god|zodiac|titan/i, names: ['Hoplite', 'Artemis Archer', 'Oracle', 'Storm Mage', 'Titan', 'Trickster'] },
+  { re: /gladiator/i, names: ['Murmillo', 'Sagittarius', 'Medicus', 'Retiarius', 'Champion', 'Velite'] },
+  { re: /element/i, names: ['Earth Golem', 'Wind Archer', 'Water Healer', 'Fire Mage', 'Stone Knight', 'Shadow'] },
+  { re: /trench|war\b|wwi|commando|squad|patrol|brigade/i, names: ['Rifleman', 'Sniper', 'Medic', 'Grenadier', 'Heavy Gunner', 'Scout'] },
+  { re: /badger|woodland|animal|critter/i, names: ['Badger', 'Squirrel Archer', 'Hedgehog Healer', 'Owl Mage', 'Boar', 'Fox'] },
+  { re: /knight|kingdom|medieval|castle|clash/i, names: ['Footman', 'Longbow', 'Priest', 'Court Mage', 'Knight', 'Thief'] },
+]
+/** Order of LABELS entries. */
+export const LABEL_ORDER: Cls[] = ['warrior', 'archer', 'healer', 'mage', 'knight', 'rogue']
+export const classLabels = (s: string) => LABELS.find((l) => l.re.test(s))?.names

@@ -1,6 +1,6 @@
 // Tactics: turn-based grid tactics (squad, terrain, enemy AI), auto-battler (buy + place, fight automatically) and creature battles.
 import { background, byDiff, clamp, createStage, emoji, keys, loop, Particles, pointer, roundRect, Shake, text, type Engine, type GameEnv, type Stage } from '../kit'
-import { CLS, CLS_LIST, genCreature, genTerrain, manhattan, moveDamage, pathTo, reach, typeMult, TYPE_ICON, TYPES, type Cls, type Creature, type CType, type Terrain } from '../logic/tactics'
+import { CLS, CLS_LIST, classLabels, genBridge, LABEL_ORDER, genCreature, genTerrain, manhattan, moveDamage, pathTo, pickTactics, reach, typeMult, TYPE_ICON, TYPES, type Cls, type Creature, type CType, type Rule, type Terrain } from '../logic/tactics'
 
 const SANS = 'system-ui, sans-serif'
 const TOP = 34
@@ -25,23 +25,45 @@ interface Ctx {
   hp: (x: number, y: number, w: number, frac: number, h?: number) => void
   inR: (r: { x: number; y: number; w: number; h: number }, x: number, y: number) => boolean
   later: (fn: () => void, ms: number) => void
+  rules: Set<Rule>
+  /** Theme names for the six classes. */
+  lab: (cl: Cls) => string
+  collect: boolean
 }
 
 const heroSet = (env: GameEnv) => [env.theme.hero, ...env.theme.heroes.filter((h) => h !== env.theme.hero)]
 
 // ======================================================= CLASSIC
-interface U { id: number; team: 0 | 1; cls: Cls; e: string; hp: number; max: number; atk: number; t: number; moved: boolean; acted: boolean; x: number; y: number; path: number[]; flash: number; lunge: number; lx: number; ly: number; then?: () => void }
+interface U { ow?: boolean; guard?: boolean; id: number; team: 0 | 1; cls: Cls; e: string; hp: number; max: number; atk: number; t: number; moved: boolean; acted: boolean; x: number; y: number; path: number[]; flash: number; lunge: number; lx: number; ly: number; then?: () => void }
 
 function classic(c: Ctx): Mode & { status(): string } {
   const { env, ctx, W, H, portrait, fx, shake, T } = c
   const th = env.theme
   const rng = env.rng
+  const R = c.rules
+  const has = (r: Rule) => R.has(r)
   const cols = portrait ? 7 : 14
   const rows = portrait ? 10 : 8
   const cell = portrait ? 50 : 48
   const ox = (W - cols * cell) / 2
   const oy = TOP + 4
-  const B = byDiff(env, 2, 3, 3)
+  const hold = has('hold')
+  const HOLD = byDiff(env, 8, 10, 12)
+  const B = hold ? 1 : byDiff(env, 2, 3, 3)
+  const WEATHER = [['☀️', 'Clear'], ['🌧️', 'Rain: -1 move'], ['🌫️', 'Fog: ranged -1'], ['💨', 'Wind: ranged +1']]
+  let weather = 0
+  let tideHigh = false
+  let baseT: Terrain[] = []
+  let hi: boolean[] = []
+  let zoneR = 99
+  let rewinds = 1
+  let gold = 10
+  let hire: Cls[] = []
+  let theirsZone: number[] = []
+  let single = false
+  const eDone = new Set<number>()
+  interface Snap { units: U[]; terrain: Terrain[]; turn: number; weather: number; tideHigh: boolean; zoneR: number }
+  let hist: Snap[] = []
   const maxSquad = 5
   let battle = 0
   let terrain: Terrain[] = []
@@ -82,7 +104,27 @@ function classic(c: Ctx): Mode & { status(): string } {
 
   const startBattle = () => {
     battle++
-    terrain = genTerrain(rng, cols, rows, 2)
+    terrain = has('bridge') ? genBridge(rng, cols, rows) : genTerrain(rng, cols, rows, 2)
+    baseT = [...terrain]
+    tideHigh = false
+    weather = 0
+    zoneR = Math.hypot(cols, rows) / 2 + 1
+    rewinds = 1
+    hist = []
+    eDone.clear()
+    hi = Array(cols * rows).fill(false)
+    if (has('high')) {
+      for (let b = 0; b < 5; b++) {
+        const cx = rng.int(3, cols - 4)
+        const cy = rng.int(1, rows - 2)
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const x = cx + dx
+          const y = cy + dy
+          if (x < 0 || y < 0 || x >= cols || y >= rows || (Math.abs(dx) + Math.abs(dy) > 1 && rng.chance(0.5))) continue
+          if (terrain[y * cols + x] === 0) hi[y * cols + x] = true
+        }
+      }
+    }
     units = []
     const zoneA: number[] = []
     const zoneB: number[] = []
@@ -96,8 +138,13 @@ function classic(c: Ctx): Mode & { status(): string } {
     rng.shuffle(zoneA); rng.shuffle(zoneB)
     const mine = portrait ? zoneB : zoneA
     const theirs = portrait ? zoneA : zoneB
+    theirsZone = theirs
+    if (has('merc') && battle > 1) {
+      gold -= squad.length
+      if (gold < 0) { gold = 0; if (squad.length > 2) { squad.pop(); msg('A merc deserted: upkeep unpaid') } }
+    }
     squad.forEach((s, i) => units.push(mk(0, s.cls, s.e, mine[i])))
-    const n = Math.min(6, byDiff(env, 3, 4, 4) + battle - 1 + (battle > 2 ? 0 : 0))
+    const n = Math.min(6, byDiff(env, 3, 4, 4) + battle - 1 - (hold ? 1 : 0))
     const scale = 1 + 0.12 * (battle - 1) + byDiff(env, -0.1, 0, 0.12)
     const pool: Cls[] = ['warrior', 'warrior', 'archer', 'knight', 'mage', 'rogue', 'healer']
     for (let i = 0; i < n; i++) units.push(mk(1, i === 0 && battle === B ? 'knight' : rng.pick(pool), th.foes[i % th.foes.length], theirs[i], battle === B && i === 0 ? scale * 1.5 : scale))
@@ -107,14 +154,110 @@ function classic(c: Ctx): Mode & { status(): string } {
     info = null
     reachMap = new Map()
     targets = []
-    msg(battle === B ? 'Final battle!' : `Battle ${battle}`)
+    msg(hold ? `Hold out until turn ${HOLD}!` : battle === B ? 'Final battle!' : `Battle ${battle}`)
+    startRound()
+  }
+  const snap = (): Snap => ({ units: units.filter((u) => u.hp > 0).map((u) => ({ ...u, path: [], then: undefined })), terrain: [...terrain], turn, weather, tideHigh, zoneR })
+  const rewind = () => {
+    if (rewinds < 1 || hist.length < 2 || phase !== 'player' || busy()) return
+    hist.pop()
+    const s = hist[hist.length - 1]
+    units = s.units.map((u) => ({ ...u, x: tx(u.t), y: ty(u.t), path: [], flash: 0, lunge: 0 }))
+    terrain = [...s.terrain]
+    turn = s.turn; weather = s.weather; tideHigh = s.tideHigh; zoneR = s.zoneR
+    rewinds--
+    select(null)
+    env.sfx('power')
+    msg('Time rewinds one turn!')
+  }
+  const applyTide = () => {
+    if (!has('tide')) return
+    tideHigh = turn % 2 === 0
+    terrain = [...baseT]
+    if (tideHigh) {
+      const flood: number[] = []
+      for (let i = 0; i < terrain.length; i++) {
+        if (baseT[i] !== 0 || unitAt(i)) continue
+        const x = i % cols
+        const y = Math.floor(i / cols)
+        if ([[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => { const nx = x + dx; const ny = y + dy; return nx >= 0 && ny >= 0 && nx < cols && ny < rows && baseT[ny * cols + nx] === 2 })) flood.push(i)
+      }
+      for (const i of flood) terrain[i] = 2
+      msg('High tide: shores flood')
+    } else msg('Low tide')
+  }
+  /** Start of a full round: weather, tide, zone damage, gear locks, snapshots. */
+  function startRound() {
+    for (const q of units) { q.acted = false; q.moved = false; q.ow = false; q.guard = false }
+    eDone.clear()
+    if (has('weather')) {
+      let w = rng.int(0, 3)
+      if (w === weather) w = (w + 1) % 4
+      weather = w
+      msg(`${WEATHER[w][0]} ${WEATHER[w][1]}`)
+    }
+    applyTide()
+    if (has('zone') && turn > 1) {
+      zoneR = Math.max(2.2, zoneR - 0.55)
+      for (const u of units) {
+        if (u.hp <= 0 || !outside(u.t)) continue
+        u.hp -= 3
+        u.flash = 0.2
+        float(u.x, u.y - 16, '-3', '#fbbf24')
+        if (u.hp <= 0) kill(u)
+      }
+      checkEnd()
+    }
+    if (has('gears')) for (const q of units) if (q.team === 0 && !gearOk(q)) q.acted = true
+    if (hold && turn > 1 && turn % 2 === 0) reinforce()
+    hist.push(snap())
+    if (hist.length > 3) hist.shift()
+  }
+  const outside = (t: number) => has('zone') && Math.hypot((t % cols) - (cols - 1) / 2, Math.floor(t / cols) - (rows - 1) / 2) > zoneR
+  const gearOk = (u: U) => (u.id + turn) % 2 === 0
+  const reinforce = () => {
+    const free = theirsZone.filter((i) => terrain[i] < 2 && !unitAt(i))
+    const n = Math.min(free.length, 1 + Math.floor(turn / 4))
+    const pool: Cls[] = ['warrior', 'warrior', 'archer', 'knight', 'mage', 'rogue']
+    for (let i = 0; i < n; i++) units.push(mk(1, rng.pick(pool), th.foes[(turn + i) % th.foes.length], free[i], 1 + 0.1 * turn))
+    msg('Reinforcements arrive!')
   }
 
-  const coverMult = (u: U) => (terrain[u.t] === 1 ? 0.65 : 1)
-  const dmgOf = (a: U, d: U) => Math.max(1, Math.round(a.atk * (a.cls === 'mage' ? 1 : coverMult(d)) * rng.range(0.9, 1.1)))
+  const coverMult = (u: U) => (terrain[u.t] === 1 && !has('xcom') ? 0.65 : 1)
+  const mvOf = (u: U) => {
+    let m = CLS[u.cls].move
+    if (has('weather') && weather === 1) m--
+    if (has('cold')) m = m - Math.floor((turn - 1) / 3) + (terrain[u.t] === 1 ? 1 : 0)
+    return Math.max(1, m)
+  }
+  const rminOf = (u: U) => CLS[u.cls].rmin + (has('artillery') && u.cls === 'archer' ? 1 : 0)
+  const rmaxOf = (u: U, tile: number) => {
+    const d = CLS[u.cls]
+    if (d.rmax <= 1) return d.rmax
+    let r = d.rmax
+    if (has('weather')) r += weather === 2 ? -1 : weather === 3 ? 1 : 0
+    if (has('high') && hi[tile]) r += 1
+    if (has('artillery') && u.cls === 'archer') r += 2
+    return Math.max(rminOf(u), r)
+  }
+  const flanked = (a: U, d: U) => units.filter((o) => o.hp > 0 && o.team === a.team && manhattan(o.t, d.t, cols) <= 1).length >= 2
+  const hitChance = (a: U, d: U) => {
+    if (!has('xcom') || (a.cls === 'healer' && d.team === a.team)) return 100
+    let p = 90 - Math.max(0, manhattan(a.t, d.t, cols) - 1) * 5
+    if (terrain[d.t] === 1) p -= 30
+    if (flanked(a, d)) p += 20
+    return clamp(p, 20, 100)
+  }
+  const dmgOf = (a: U, d: U) => {
+    let m = a.cls === 'mage' ? 1 : coverMult(d)
+    if (has('high')) { if (hi[a.t] && !hi[d.t]) m *= 1.25; else if (!hi[a.t] && hi[d.t]) m *= 0.85 }
+    if (d.guard) m *= 0.55
+    if (has('xcom') && flanked(a, d)) m *= 1.4
+    return Math.max(1, Math.round(a.atk * m * rng.range(0.9, 1.1)))
+  }
   const inRange = (a: U, fromTile: number, d: U) => {
     const dist = manhattan(fromTile, d.t, cols)
-    return dist >= CLS[a.cls].rmin && dist <= CLS[a.cls].rmax
+    return dist >= rminOf(a) && dist <= rmaxOf(a, fromTile)
   }
   const computeTargets = (u: U, from: number) => {
     if (u.acted) return []
@@ -157,38 +300,84 @@ function classic(c: Ctx): Mode & { status(): string } {
       return
     }
     env.sfx(CLS[a.cls].rmax > 1 ? 'shoot' : 'hit')
+    if (rng() * 100 >= hitChance(a, d)) { float(d.x, d.y - 16, 'Miss', '#cbd5e1'); return }
     hit(a, d)
-    if (a.cls === 'mage') for (const o of units) if (o.hp > 0 && o.team === d.team && o !== d && manhattan(o.t, d.t, cols) === 1) hit(a, o, 0.6)
+    if (a.cls === 'mage' || (has('artillery') && a.cls === 'archer')) for (const o of units) if (o.hp > 0 && o.team === d.team && o !== d && manhattan(o.t, d.t, cols) === 1) hit(a, o, 0.6)
+    if (has('bridge') && d.hp > 0 && (a.cls === 'warrior' || a.cls === 'knight') && manhattan(a.t, d.t, cols) === 1) shove(a, d)
     if (d.hp <= 0 && a.cls === 'rogue') { /* rogue keeps momentum visually only */ }
+  }
+  const shove = (a: U, d: U) => {
+    const ax = a.t % cols
+    const ay = Math.floor(a.t / cols)
+    const dx = Math.sign((d.t % cols) - ax)
+    const dy = Math.sign(Math.floor(d.t / cols) - ay)
+    const nx = (d.t % cols) + dx
+    const ny = Math.floor(d.t / cols) + dy
+    if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) return
+    const nt = ny * cols + nx
+    if (unitAt(nt) || terrain[nt] === 3) return
+    d.t = nt
+    d.path = [nt]
+    if (terrain[nt] === 2) { d.hp = 0; float(d.x, d.y - 24, 'Swept off!', '#7dd3fc'); kill(d); env.sfx('boom') } else float(d.x, d.y - 24, 'Shoved', '#fde68a')
+  }
+  const owCheck = (m: U) => {
+    for (const o of units) {
+      if (m.hp <= 0) break
+      if (o.hp > 0 && o.team === 0 && o.ow && inRange(o, o.t, m)) {
+        o.ow = false
+        o.lunge = 0.28; o.lx = (m.x - o.x) * 0.35; o.ly = (m.y - o.y) * 0.35
+        float(o.x, o.y - 22, 'Overwatch!', '#7dd3fc')
+        hit(o, m, 0.9)
+      }
+    }
   }
   const moveUnit = (u: U, to: number, then?: () => void) => {
     const p = pathTo(terrain, cols, rows, u.t, to, 99, occupied(u))
     u.t = to
     u.moved = true
     u.path = p.slice(1)
-    u.then = then
-    if (!u.path.length) { u.then = undefined; then?.() }
+    const wrapped = () => { if (u.team === 1 && has('overwatch')) owCheck(u); if (u.hp > 0) then?.(); else checkEnd() }
+    u.then = wrapped
+    if (!u.path.length) { u.then = undefined; wrapped() }
   }
 
   const select = (u: U | null) => {
     sel = u
     if (u) info = u
     if (!u || u.acted || u.team !== 0) { reachMap = new Map(); targets = []; return }
-    reachMap = u.moved ? new Map() : reach(terrain, cols, rows, u.t, CLS[u.cls].move, occupied(u))
+    reachMap = u.moved ? new Map() : reach(terrain, cols, rows, u.t, mvOf(u), occupied(u))
     targets = computeTargets(u, u.t)
   }
   const afterAction = (u: U) => {
     if (u.hp > 0 && !u.acted) { select(u); if (!targets.length && u.moved) { u.acted = true; select(null) } } else select(null)
     checkEnd()
-    if (phase === 'player' && units.filter((x) => x.team === 0 && x.hp > 0).every((x) => x.acted)) endTurn()
+    if (phase !== 'player') return
+    if (has('initiative') && u.acted && units.some((q) => q.team === 1 && q.hp > 0 && !eDone.has(q.id))) {
+      const nx = units.filter((q) => q.team === 1 && q.hp > 0 && !eDone.has(q.id))[0]
+      eDone.add(nx.id)
+      phase = 'enemy'
+      enemyQ = [nx]
+      single = true
+      timer = 0.4
+      select(null)
+      return
+    }
+    if (units.filter((x) => x.team === 0 && x.hp > 0).every((x) => x.acted)) endTurn()
   }
   const checkEnd = () => {
     if (phase === 'victory' || phase === 'over') return
-    if (!units.some((u) => u.team === 1 && u.hp > 0)) {
+    if (hold && units.some((u) => u.team === 0 && u.hp > 0)) {
+      if (turn > HOLD) { phase = 'victory'; env.sfx('win'); finish(true); return }
+      if (!units.some((u) => u.team === 1 && u.hp > 0)) { reinforce(); return }
+    }
+    if (!hold && !units.some((u) => u.team === 1 && u.hp > 0)) {
       phase = 'victory'
       env.sfx('win')
       squad = units.filter((u) => u.team === 0 && u.hp > 0).map((u) => ({ cls: u.cls, e: u.e }))
-      if (squad.length < maxSquad) squad.push({ cls: CLS_LIST[rng.int(0, 5)], e: heroes[squad.length % heroes.length] })
+      if (has('merc')) {
+        gold += 6 + 3 * battle + kills
+        hire = Array.from({ length: 3 }, () => CLS_LIST[rng.int(0, 5)])
+      } else if (squad.length < maxSquad) squad.push({ cls: CLS_LIST[rng.int(0, 5)], e: heroes[squad.length % heroes.length] })
       if (battle >= B) finish(true)
     } else if (!units.some((u) => u.team === 0 && u.hp > 0)) {
       phase = 'over'
@@ -210,14 +399,16 @@ function classic(c: Ctx): Mode & { status(): string } {
     if (phase !== 'player') return
     phase = 'enemy'
     select(null)
-    enemyQ = units.filter((u) => u.team === 1 && u.hp > 0)
+    enemyQ = units.filter((u) => u.team === 1 && u.hp > 0 && !eDone.has(u.id) && (!has('gears') || gearOk(u)))
+    for (const u of enemyQ) eDone.add(u.id)
+    single = false
     timer = 0.5
-    for (const u of units) { u.acted = false; u.moved = false }
+    for (const u of units) { u.moved = false; if (u.team === 1) u.acted = false }
   }
 
   const aiAct = (u: U) => {
     const occ = occupied(u)
-    const rm = reach(terrain, cols, rows, u.t, CLS[u.cls].move, occ)
+    const rm = reach(terrain, cols, rows, u.t, mvOf(u), occ)
     const foes = units.filter((o) => o.hp > 0 && o.team === 0)
     const allies = units.filter((o) => o.hp > 0 && o.team === 1)
     let best: { tile: number; tgt: U | null; sc: number } | null = null
@@ -227,13 +418,13 @@ function classic(c: Ctx): Mode & { status(): string } {
       const cands = u.cls === 'healer' ? allies.filter((a) => a !== u && a.hp < a.max) : foes
       for (const o of cands) {
         const d = manhattan(tile, o.t, cols)
-        if (d < CLS[u.cls].rmin || d > CLS[u.cls].rmax) continue
+        if (d < rminOf(u) || d > rmaxOf(u, tile)) continue
         let sc: number
         if (u.cls === 'healer') sc = (o.max - o.hp) * 1.2 + cover
         else {
           const dm = u.atk * (o.cls === 'mage' ? 1 : terrain[o.t] === 1 ? 0.65 : 1)
           sc = dm + (dm >= o.hp ? 25 : 0) + (o.hp / o.max < 0.5 ? 4 : 0) + (o.cls === 'healer' || o.cls === 'mage' ? 3 : 0) + cover
-          if (CLS[u.cls].rmax > 1) sc += d === CLS[u.cls].rmax ? 2 : 0
+          if (CLS[u.cls].rmax > 1) sc += d === rmaxOf(u, tile) ? 2 : 0
         }
         if (dumb) sc = rng.range(0, 10)
         if (!best || sc > best.sc) best = { tile, tgt: o, sc }
@@ -251,7 +442,7 @@ function classic(c: Ctx): Mode & { status(): string } {
     let bd = 1e9
     for (const [tile] of rm) {
       const d = Math.min(...goals.map((o) => manhattan(tile, o.t, cols)), 99) - (terrain[tile] === 1 ? 0.6 : 0) + (CLS[u.cls].rmax > 1 ? 0 : 0)
-      const want = CLS[u.cls].rmax > 1 ? Math.abs(d - CLS[u.cls].rmax) : d
+      const want = CLS[u.cls].rmax > 1 ? Math.abs(d - rmaxOf(u, tile)) : d
       if (want < bd) { bd = want; bt = tile }
     }
     if (bt !== u.t) moveUnit(u, bt)
@@ -260,14 +451,33 @@ function classic(c: Ctx): Mode & { status(): string } {
   const click = (x: number, y: number) => {
     intro = 0
     if (phase === 'victory') {
+      if (has('merc') && battle < B) {
+        hireRects().forEach((r, i) => {
+          const cl = hire[i]
+          if (cl && c.inR(r, x, y)) {
+            if (squad.length >= maxSquad) msg('Squad is full')
+            else if (gold < CLS[cl].cost) msg('Not enough gold')
+            else { gold -= CLS[cl].cost; squad.push({ cls: cl, e: heroes[squad.length % heroes.length] }); hire[i] = 'none' as Cls; env.sfx('power') }
+          }
+        })
+        if (c.inR(contRect(), x, y)) startBattle()
+        return
+      }
       if (battle < B) startBattle()
       return
     }
     if (phase !== 'player' || busy()) return
-    const bw = 96
-    const by = H - 46
-    if (x > W - bw - 8 && y > by) return endTurn()
-    if (x > W - bw * 2 - 16 && x < W - bw - 12 && y > by) { if (sel && !sel.acted) { sel.acted = true; afterAction(sel) } return }
+    if (y > H - 46) {
+      for (const b of btns()) {
+        if (!c.inR(b.r, x, y) || b.dis) continue
+        if (b.id === 'end') endTurn()
+        else if (b.id === 'wait') { if (sel && !sel.acted) { sel.acted = true; afterAction(sel) } }
+        else if (b.id === 'ow' || b.id === 'guard') { const s = sel!; if (b.id === 'ow') s.ow = true; else s.guard = true; s.acted = true; env.sfx('click'); afterAction(s) }
+        else if (b.id === 'rewind') rewind()
+        return
+      }
+      return
+    }
     const i = Math.floor((x - ox) / cell) + Math.floor((y - oy) / cell) * cols
     if (x < ox || x >= ox + cols * cell || y < oy || y >= oy + rows * cell) return
     const o = unitAt(i)
@@ -289,6 +499,22 @@ function classic(c: Ctx): Mode & { status(): string } {
     } else select(null)
   }
 
+  const ruleHint = () => has('weather') ? 'Weather changes every turn.' : has('tide') ? 'Tides flood the shore every other turn.' : has('cold') ? 'The cold drains movement. Forests shelter.' : has('zone') ? 'Stay inside the light or take damage.' : has('high') ? 'High ground: more range and damage.' : has('xcom') ? 'Hit chances shown. Flank for bonus damage.' : has('overwatch') ? 'Overwatch shoots enemies that move in.' : has('rewind') ? 'Rewind undoes your last turn once.' : hold ? `Survive until turn ${HOLD}. Waves keep coming.` : has('bridge') ? 'Melee hits shove foes. Push them into the water!' : has('artillery') ? 'Archers lob shells with splash damage.' : has('merc') ? 'Spend winnings on mercenaries. Mind the upkeep.' : has('gears') ? 'Units act on alternate turns (gear cycle).' : has('initiative') ? 'Units act alternately, player then enemy.' : has('guard') ? 'Guard halves incoming damage.' : 'Forests give cover.'
+  const hireRects = () => hire.map((_, i) => ({ x: W / 2 - 150 + i * 102, y: H / 2 - 18, w: 96, h: 72 }))
+  const contRect = () => ({ x: W / 2 - 60, y: H / 2 + 62, w: 120, h: 34 })
+  /** Bottom-bar buttons (rule specials, Wait, End turn), laid out from the right edge. */
+  const btns = () => {
+    const l: { id: string; label: string; dis: boolean; color?: string }[] = []
+    const pl = phase === 'player'
+    if (has('rewind')) l.push({ id: 'rewind', label: `Rewind ${rewinds}`, dis: !pl || rewinds < 1 || hist.length < 2 })
+    if (has('overwatch')) l.push({ id: 'ow', label: 'Overwatch', dis: !pl || !sel || sel.acted })
+    if (has('guard')) l.push({ id: 'guard', label: 'Guard', dis: !pl || !sel || sel.acted })
+    l.push({ id: 'wait', label: 'Wait', dis: !pl || !sel })
+    l.push({ id: 'end', label: 'End turn', dis: !pl, color: th.good })
+    const n = l.length
+    const bw = Math.min(96, (W - 16 - (n - 1) * 6) / n)
+    return l.map((b, i) => ({ ...b, r: { x: W - 8 - (n - i) * bw - (n - i - 1) * 6, y: H - 46, w: bw, h: 38 } }))
+  }
   const key = (code: string) => {
     if (code === 'Space' || code === 'Enter') { if (phase === 'victory') click(0, 0); else endTurn() }
     else if (code === 'Escape') select(null)
@@ -317,10 +543,19 @@ function classic(c: Ctx): Mode & { status(): string } {
       if (timer <= 0) {
         const u = enemyQ.shift()
         if (!u) {
-          phase = 'player'
-          turn++
-          for (const q of units) { q.acted = false; q.moved = false }
-          msg(`Turn ${turn}`)
+          const wasSingle = single
+          single = false
+          const mineLeft = units.some((q) => q.team === 0 && q.hp > 0 && !q.acted)
+          const theirsLeft = units.filter((q) => q.team === 1 && q.hp > 0 && !eDone.has(q.id))
+          if (has('initiative') && wasSingle && mineLeft) phase = 'player'
+          else if (has('initiative') && theirsLeft.length) { enemyQ = theirsLeft; for (const q of theirsLeft) eDone.add(q.id); timer = 0.45 }
+          else {
+            phase = 'player'
+            turn++
+            startRound()
+            checkEnd()
+            if (phase === 'player') msg(`Turn ${turn}`)
+          }
         } else if (u.hp > 0) {
           aiAct(u)
           timer = 0.45
@@ -330,7 +565,7 @@ function classic(c: Ctx): Mode & { status(): string } {
     const p = units.filter((u) => u.team === 0 && u.hp > 0).length
     const e = units.filter((u) => u.team === 1 && u.hp > 0).length
     env.score(score())
-    env.status(`Battle ${battle}/${B} · Turn ${turn} · ${p} vs ${e}`)
+    env.status(`${hold ? `Hold ${Math.min(turn, HOLD)}/${HOLD}` : `Battle ${battle}/${B}`} · Turn ${turn} · ${p} vs ${e}`)
   }
 
   const drawUnit = (u: U) => {
@@ -350,6 +585,9 @@ function classic(c: Ctx): Mode & { status(): string } {
     ctx.beginPath(); ctx.arc(x, y, cell * 0.42, 0, 7); ctx.stroke()
     emoji(ctx, u.e, x, y - 1, cell * 0.56)
     T(CLS[u.cls].icon, x + cell * 0.3, y + cell * 0.22, cell * 0.28, '#fff')
+    if (u.ow) T('👁️', x - cell * 0.3, y + cell * 0.22, cell * 0.3, '#fff')
+    if (u.guard) T('🛡️', x - cell * 0.3, y + cell * 0.22, cell * 0.3, '#fff')
+    if (has('gears') && u.team === 0 && !gearOk(u) && phase === 'player') T('⚙️', x - cell * 0.3, y + cell * 0.22, cell * 0.3, '#fff')
     c.hp(x - cell * 0.35, y - cell * 0.5, cell * 0.7, u.hp / u.max, 4)
     ctx.globalAlpha = 1
   }
@@ -368,6 +606,8 @@ function classic(c: Ctx): Mode & { status(): string } {
       if (t === 1) { ctx.fillStyle = 'rgba(34,197,94,.22)'; ctx.fillRect(x, y, cell, cell); emoji(ctx, '🌲', x + cell / 2, y + cell / 2 + 2, cell * 0.62) }
       else if (t === 2) { ctx.fillStyle = 'rgba(56,189,248,.35)'; ctx.fillRect(x, y, cell, cell); ctx.strokeStyle = 'rgba(255,255,255,.3)'; ctx.beginPath(); ctx.moveTo(x + 6, y + cell / 2); ctx.quadraticCurveTo(x + cell / 2, y + cell / 2 - 7, x + cell - 6, y + cell / 2); ctx.stroke() }
       else if (t === 3) { ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.fillRect(x, y, cell, cell); emoji(ctx, '⛰️', x + cell / 2, y + cell / 2, cell * 0.7) }
+      if (hi[i]) { ctx.fillStyle = 'rgba(250,204,21,.16)'; ctx.fillRect(x, y, cell, cell); T('▲', x + cell - 9, y + 9, 10, '#fde68a') }
+      if (outside(i)) { ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(x, y, cell, cell) }
       if (reachMap.has(i) && i !== sel?.t) { ctx.fillStyle = 'rgba(96,165,250,.38)'; ctx.fillRect(x + 1, y + 1, cell - 2, cell - 2) }
       ctx.strokeStyle = 'rgba(255,255,255,.06)'
       ctx.strokeRect(x, y, cell, cell)
@@ -379,6 +619,7 @@ function classic(c: Ctx): Mode & { status(): string } {
       ctx.fillStyle = heal ? 'rgba(74,222,128,.4)' : 'rgba(248,113,113,.45)'
       ctx.fillRect(x + 1, y + 1, cell - 2, cell - 2)
       ctx.strokeStyle = heal ? '#4ade80' : '#f87171'; ctx.lineWidth = 3; ctx.strokeRect(x + 2, y + 2, cell - 4, cell - 4)
+      if (has('xcom') && sel && !heal) T(`${hitChance(sel, u)}%`, x + cell / 2, y + cell - 7, 12, '#fff')
     }
     for (const u of [...units].sort((a, b) => a.y - b.y)) drawUnit(u)
     fx.draw(ctx)
@@ -388,27 +629,40 @@ function classic(c: Ctx): Mode & { status(): string } {
     ctx.fillStyle = 'rgba(0,0,0,.5)'
     ctx.fillRect(0, 0, W, TOP)
     T(phase === 'enemy' ? 'Enemy turn…' : phase === 'victory' ? 'Victory!' : `Your turn · ${turn}`, 10, 17, 14, phase === 'enemy' ? th.danger : th.accent, 'left')
-    T(`Battle ${battle}/${B}`, W - 10, 17, 13, th.fg, 'right')
+    T(hold ? `Hold ${Math.min(turn, HOLD)}/${HOLD}` : `Battle ${battle}/${B}`, W - 10, 17, 13, th.fg, 'right')
+    const ruleTxt = has('weather') ? `${WEATHER[weather][0]} ${WEATHER[weather][1]}` : has('tide') ? (tideHigh ? '🌊 High tide' : '🏖️ Low tide') : has('cold') ? `❄️ Move -${Math.floor((turn - 1) / 3)}` : has('zone') ? `🏮 Light ${zoneR.toFixed(1)}` : has('merc') ? `🪙 ${gold}` : ''
+    if (ruleTxt) T(ruleTxt, W / 2, 17, portrait ? 11 : 13, '#fde68a')
     const py = H - (portrait ? 100 : 56)
     ctx.fillStyle = 'rgba(0,0,0,.5)'
     ctx.fillRect(0, py + (portrait ? 0 : 0), W, H - py)
     const iu = info && info.hp > 0 ? info : null
     if (iu) {
       emoji(ctx, iu.e, 28, py + 26, 30)
-      const d = CLS[iu.cls]
-      T(`${d.label} ${iu.team ? '(enemy)' : ''}`, 54, py + 14, 13, iu.team ? th.danger : th.accent, 'left')
-      T(`HP ${iu.hp}/${iu.max}  ATK ${iu.atk}  Move ${d.move}  Rng ${d.rmin === d.rmax ? d.rmax : `${d.rmin}-${d.rmax}`}`, 54, py + 32, 11, th.fg, 'left')
+      const rmx = rmaxOf(iu, iu.t)
+      const rmn = rminOf(iu)
+      T(`${c.lab(iu.cls)} ${iu.team ? '(enemy)' : ''}`, 54, py + 14, 13, iu.team ? th.danger : th.accent, 'left')
+      T(`HP ${iu.hp}/${iu.max}  ATK ${iu.atk}  Move ${mvOf(iu)}  Rng ${rmn === rmx ? rmx : `${rmn}-${rmx}`}`, 54, py + 32, 11, th.fg, 'left')
       T(iu.cls === 'healer' ? 'Heals allies' : iu.cls === 'mage' ? 'Splash, ignores cover' : iu.cls === 'archer' ? 'Cannot hit adjacent' : terrain[iu.t] === 1 ? 'In cover (-35% dmg)' : 'Forest gives cover', 54, py + 48, 10, '#a1a1aa', 'left')
     } else T('Tap a unit to select it', 12, py + 24, 12, '#a1a1aa', 'left')
-    const bw = 96
-    const by = H - 46
-    c.btn(W - bw - 8, by, bw, 38, 'End turn', { color: th.good, dis: phase !== 'player' })
-    c.btn(W - bw * 2 - 16, by, bw, 38, 'Wait', { dis: phase !== 'player' || !sel })
+    for (const b of btns()) c.btn(b.r.x, b.r.y, b.r.w, b.r.h, b.label, { color: b.color, dis: b.dis })
     if (flashT > 0) { ctx.globalAlpha = clamp(flashT, 0, 1); text(ctx, flashMsg, W / 2, oy + 30, { size: 16, color: '#fff', shadow: th.accent }); ctx.globalAlpha = 1 }
-    if (phase === 'victory') {
+    if (phase === 'victory' && has('merc') && battle < B) {
+      roundRect(ctx, W / 2 - 165, H / 2 - 100, 330, 220, 14, 'rgba(0,0,0,.88)', th.good)
+      T(`Victory! 🪙 ${gold}`, W / 2, H / 2 - 76, 18, th.good)
+      T(`Hire mercenaries (upkeep ${squad.length}/battle)`, W / 2, H / 2 - 50, 11, '#a1a1aa')
+      hireRects().forEach((r, i) => {
+        const cl = hire[i]
+        if (!CLS[cl]) { roundRect(ctx, r.x, r.y, r.w, r.h, 8, 'rgba(255,255,255,.04)'); return }
+        roundRect(ctx, r.x, r.y, r.w, r.h, 8, 'rgba(255,255,255,.12)')
+        emoji(ctx, heroes[CLS_LIST.indexOf(cl) % heroes.length], r.x + r.w / 2, r.y + 24, 28)
+        T(c.lab(cl), r.x + r.w / 2, r.y + 48, 10, th.fg)
+        T(`🪙${CLS[cl].cost}`, r.x + r.w / 2, r.y + 63, 11, gold >= CLS[cl].cost ? '#fde68a' : '#f87171')
+      })
+      c.btn(contRect().x, contRect().y, contRect().w, contRect().h, 'Next battle ▶', { color: th.good })
+    } else if (phase === 'victory') {
       roundRect(ctx, W / 2 - 150, H / 2 - 70, 300, 130, 14, 'rgba(0,0,0,.82)', th.good)
       T(battle >= B ? 'Campaign won!' : 'Victory!', W / 2, H / 2 - 32, 20, th.good)
-      T(battle >= B ? 'All foes defeated' : 'Tap to start the next battle', W / 2, H / 2 + 4, 13, th.fg)
+      T(battle >= B ? (hold ? `Held out for ${HOLD} turns` : 'All foes defeated') : 'Tap to start the next battle', W / 2, H / 2 + 4, 13, th.fg)
       T(`Kills ${kills}`, W / 2, H / 2 + 32, 12, '#a1a1aa')
     }
     if (intro > 0 && phase === 'player') {
@@ -416,7 +670,7 @@ function classic(c: Ctx): Mode & { status(): string } {
       roundRect(ctx, W / 2 - 160, oy + 60, 320, 96, 14, 'rgba(0,0,0,.78)', th.accent)
       text(ctx, env.name.slice(0, 26), W / 2, oy + 86, { size: portrait ? 10 : 13, color: th.accent })
       T('Tap a unit, a blue tile to move,', W / 2, oy + 112, 12, th.fg)
-      T('then a red target to attack. Forests give cover.', W / 2, oy + 132, 12, '#a1a1aa')
+      T(ruleHint(), W / 2, oy + 132, portrait ? 10 : 12, '#a1a1aa')
       ctx.globalAlpha = 1
     }
   }
@@ -505,7 +759,7 @@ function auto(c: Ctx): Mode {
     units[units.indexOf(keep)] = n
     fx.burst(px(n.t), py(n.t), '#fde68a', 24, 180, 4)
     env.sfx('power')
-    msg(`${CLS[cl].label} ★${star + 1}!`)
+    msg(`${c.lab(cl)} ★${star + 1}!`)
     merge(cl, star + 1, keep.t)
   }
   const place = (cl: Cls, t: number) => {
@@ -753,7 +1007,7 @@ function auto(c: Ctx): Mode {
         const d = CLS[cl]
         roundRect(ctx, r.x, r.y, r.w, r.h, 8, selOffer === i ? 'rgba(255,255,255,.28)' : 'rgba(255,255,255,.1)', selOffer === i ? th.accent : undefined)
         emoji(ctx, clsE(cl, 0), r.x + r.w / 2, r.y + r.h * 0.3, portrait ? 26 : 34)
-        T(`${d.icon} ${d.label}`, r.x + r.w / 2, r.y + r.h * 0.62, portrait ? 9 : 11, th.fg)
+        T(`${d.icon} ${c.lab(cl).slice(0, portrait ? 9 : 14)}`, r.x + r.w / 2, r.y + r.h * 0.62, portrait ? 8 : 10, th.fg)
         T(`🪙${d.cost}`, r.x + r.w / 2, r.y + r.h * 0.84, 11, gold >= d.cost ? '#fde68a' : '#f87171')
       }
       c.btn(rollRect.x, rollRect.y, rollRect.w, rollRect.h, 'Reroll 🪙1', { dis: gold < 1 })
@@ -781,6 +1035,11 @@ function creature(c: Ctx): Mode {
   const th = env.theme
   const rng = env.rng
   const trainers = byDiff(env, 3, 4, 5)
+  const collect = c.collect
+  const goal = byDiff(env, 4, 5, 6)
+  let caught = 0
+  const info = `${env.name} ${env.desc}`.toLowerCase()
+  const verb = /photograph|field guide/.test(info) ? 'photograph' : /befriend|bond|spirit/.test(info) ? 'befriend' : /hatch|egg/.test(info) ? 'hatch' : /revive|fossil/.test(info) ? 'revive' : /debug|glitch/.test(info) ? 'debug' : 'catch'
   const pool = [...th.heroes, ...th.foes].filter((e, i, a) => a.indexOf(e) === i)
   const used = new Set<string>()
   const pickE = (first?: string) => {
@@ -822,7 +1081,40 @@ function creature(c: Ctx): Mode {
   const foe = () => foes[ei]
   const say = (s: string) => { log = s }
   const after = (d: number, fn: () => void) => queue.push({ d, fn })
+  const startWild = () => {
+    const lvl = 4 + caught * 1.3 + byDiff(env, -1, 0, 1)
+    foes = [genCreature(rng, pickE(), Math.round(lvl))]
+    ei = 0
+    phase = 'busy'
+    say(`A wild ${foe().name} appears!`)
+    after(1.0, () => { phase = 'choose'; say(`Weaken it, then ${verb} it! What will ${me().name} do?`) })
+  }
+  const tryCatch = () => {
+    if (phase !== 'choose') return
+    if (team.length >= 6) { say('Your team is full!'); return }
+    phase = 'busy'
+    const f = foe()
+    const pr = clamp(0.2 + 0.75 * (1 - f.hp / f.maxHp), 0.15, 0.95)
+    say(`You try to ${verb} ${f.name}…`)
+    after(1.0, () => {
+      if (rng() < pr) {
+        caught++
+        env.sfx('power')
+        say(`${f.name} joined your team! (${caught}/${goal})`)
+        team.push(f)
+        f.hp = Math.max(f.hp, Math.ceil(f.maxHp * 0.5))
+        if (caught >= goal) after(1.2, () => finish(true)); else after(1.2, () => { phase = 'busy'; startWild() })
+      } else {
+        say(`${f.name} broke free!`)
+        after(0.9, () => {
+          doMove(f, me(), enemyPick(), false)
+          after(1.0, () => { if (!faintCheck()) { phase = 'choose'; say(`What will ${me().name} do?`) } })
+        })
+      }
+    })
+  }
   const startTrainer = () => {
+    if (collect) { startWild(); return }
     const lvl = 5 + trainer * 1.5 + byDiff(env, -1, 0, 1)
     const n = Math.min(3, 2 + (trainer >= 2 ? 1 : 0))
     foes = Array.from({ length: n }, (_, i) => genCreature(rng, pickE(), Math.round(lvl) + (trainer === trainers - 1 && i === n - 1 ? 2 : 0)))
@@ -880,6 +1172,12 @@ function creature(c: Ctx): Mode {
     return false
   }
   const trainerWon = () => {
+    if (collect) {
+      for (const t of team) { if (t.hp > 0) t.hp = Math.min(t.maxHp, t.hp + Math.ceil(t.maxHp * 0.25)) }
+      say(`${foe().name} fled. Find another!`)
+      after(1.2, () => startWild())
+      return
+    }
     trainer++
     if (trainer >= trainers) { finish(true); return }
     for (const t of team) levelUp(t)
@@ -887,7 +1185,7 @@ function creature(c: Ctx): Mode {
     phase = 'next'
   }
   let ended = false
-  const score = () => defeated * 100 + trainer * 300 + team.filter((t) => t.hp > 0).length * 50
+  const score = () => defeated * 60 + caught * 250 + trainer * 300 + team.filter((t) => t.hp > 0).length * 50
   const finish = (won: boolean) => {
     if (ended) return
     ended = true
@@ -895,7 +1193,7 @@ function creature(c: Ctx): Mode {
     const sc = score() + (won ? 500 : 0)
     env.score(sc)
     env.sfx(won ? 'win' : 'lose')
-    env.end({ score: sc, won, text: won ? `Beat all ${trainers} trainers` : `Defeated by trainer ${trainer + 1}` })
+    env.end({ score: sc, won, text: collect ? (won ? `Collected ${caught} creatures` : `Team fainted with ${caught} of ${goal} collected`) : won ? `Beat all ${trainers} trainers` : `Defeated by trainer ${trainer + 1}` })
   }
   const enemyPick = () => {
     const f = foe()
@@ -944,13 +1242,14 @@ function creature(c: Ctx): Mode {
     })
   }
 
+  const teamRow = (i: number) => (team.length > 3 ? { x: W / 2 - 150, y: H / 2 - 150 + i * 52, w: 300, h: 46 } : { x: W / 2 - 150, y: H / 2 - 110 + i * 70, w: 300, h: 62 })
   const click = (x: number, y: number) => {
     if (phase === 'over') return
     if (phase === 'next') { startTrainer(); return }
     if (overlay === 'types') { overlay = 'none'; return }
     if (overlay === 'team') {
-      for (let i = 0; i < 3; i++) {
-        const r = { x: W / 2 - 150, y: H / 2 - 110 + i * 70, w: 300, h: 62 }
+      for (let i = 0; i < team.length; i++) {
+        const r = teamRow(i)
         if (c.inR(r, x, y)) { switchTo(i, phase === 'forced'); return }
       }
       if (phase !== 'forced') overlay = 'none'
@@ -959,7 +1258,7 @@ function creature(c: Ctx): Mode {
     if (phase !== 'choose') return
     for (let i = 0; i < 4; i++) if (c.inR(moveRect(i), x, y)) { playerMove(i); return }
     if (c.inR(teamRect, x, y)) { overlay = 'team'; return }
-    if (c.inR(typesRect, x, y)) overlay = 'types'
+    if (c.inR(typesRect, x, y)) { if (collect) tryCatch(); else overlay = 'types' }
   }
   const key = (code: string) => {
     if (code >= 'Digit1' && code <= 'Digit4') playerMove(Number(code.slice(5)) - 1)
@@ -981,7 +1280,7 @@ function creature(c: Ctx): Mode {
       if (wait <= 0) { const e = queue.shift()!; e.fn(); wait = e.d }
     }
     env.score(score())
-    env.status(`Trainer ${trainer + 1}/${trainers} · ${team.filter((t) => t.hp > 0).length} left`)
+    env.status(collect ? `Collected ${caught}/${goal} · ${team.filter((t) => t.hp > 0).length} left` : `Trainer ${trainer + 1}/${trainers} · ${team.filter((t) => t.hp > 0).length} left`)
   }
 
   const plate = (cr: Creature, x: number, y: number, w: number, you: boolean) => {
@@ -1023,7 +1322,7 @@ function creature(c: Ctx): Mode {
     ctx.restore()
     ctx.fillStyle = 'rgba(0,0,0,.5)'
     ctx.fillRect(0, 0, W, TOP)
-    T(`Trainer ${trainer + 1}/${trainers}`, 10, 17, 13, th.accent, 'left')
+    T(collect ? `Collected ${caught}/${goal}` : `Trainer ${trainer + 1}/${trainers}`, 10, 17, 13, th.accent, 'left')
     T(team.map((t) => (t.hp > 0 ? '●' : '○')).join(' '), W - 10, 17, 14, th.good, 'right')
     // panel
     ctx.fillStyle = 'rgba(0,0,0,.55)'
@@ -1052,18 +1351,18 @@ function creature(c: Ctx): Mode {
       T(`PP ${left}/${mv.pp}`, r.x + r.w - 10, r.y + r.h * 0.62, 10, left ? '#a1a1aa' : '#f87171', 'right')
     }
     c.btn(teamRect.x, teamRect.y, teamRect.w, teamRect.h, 'Team', { dis: phase !== 'choose' })
-    c.btn(typesRect.x, typesRect.y, typesRect.w, typesRect.h, 'Type chart', { dis: false })
+    c.btn(typesRect.x, typesRect.y, typesRect.w, typesRect.h, collect ? `${verb[0].toUpperCase()}${verb.slice(1)} (${Math.round(clamp(0.2 + 0.75 * (1 - (foes.length ? foe().hp / foe().maxHp : 1)), 0.15, 0.95) * 100)}%)` : 'Type chart', { dis: collect && phase !== 'choose', color: collect ? th.good : undefined })
     if (phase === 'next') { roundRect(ctx, W / 2 - 150, TOP + 120, 300, 80, 14, 'rgba(0,0,0,.85)', th.good); T('Tap for the next trainer', W / 2, TOP + 160, 14, th.fg) }
     if (overlay === 'team') {
       ctx.fillStyle = 'rgba(0,0,0,.75)'; ctx.fillRect(0, 0, W, H)
-      T(phase === 'forced' ? 'Choose next creature' : 'Switch creature', W / 2, H / 2 - 135, 14, th.accent)
+      T(phase === 'forced' ? 'Choose next creature' : 'Switch creature', W / 2, team.length > 3 ? H / 2 - 175 : H / 2 - 135, 14, th.accent)
       team.forEach((cr, i) => {
-        const r = { x: W / 2 - 150, y: H / 2 - 110 + i * 70, w: 300, h: 62 }
+        const r = teamRow(i)
         roundRect(ctx, r.x, r.y, r.w, r.h, 10, i === pi ? 'rgba(255,255,255,.22)' : 'rgba(255,255,255,.1)', cr.hp <= 0 ? '#555' : th.accent)
         ctx.globalAlpha = cr.hp > 0 ? 1 : 0.35
-        emoji(ctx, cr.emoji, r.x + 30, r.y + 31, 36)
-        T(`${cr.name} Lv${cr.lvl} ${TYPE_ICON[cr.type]}`, r.x + 60, r.y + 20, 12, th.fg, 'left')
-        c.hp(r.x + 60, r.y + 36, 220, cr.hp / cr.maxHp, 8)
+        emoji(ctx, cr.emoji, r.x + 30, r.y + r.h / 2, r.h > 50 ? 36 : 30)
+        T(`${cr.name} Lv${cr.lvl} ${TYPE_ICON[cr.type]}`, r.x + 60, r.y + (r.h > 50 ? 20 : 15), 12, th.fg, 'left')
+        c.hp(r.x + 60, r.y + (r.h > 50 ? 36 : 28), 220, cr.hp / cr.maxHp, 8)
         ctx.globalAlpha = 1
       })
     }
@@ -1115,11 +1414,17 @@ const engine: Engine = {
       },
       inR: (r, x, y) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h,
       later(fn, ms) { const id = setTimeout(() => { timers.delete(id); fn() }, ms); timers.add(id) },
+      rules: new Set<Rule>(),
+      lab: (cl) => CLS[cl].label,
+      collect: false,
     }
     const info = `${env.name} ${env.desc}`
-    const isCreature = /creature|monster|critter|cryptid|\bpets?\b|\bpals\b|kaiju|slime|wisps?|spirit|hatchery|fossil|coral kin|glitch|beast/i.test(info)
-    const isAuto = !isCreature && (env.mods.has('auto') || /\bauto\b|autom|draft|lineup|bench|brawl|arena|roster|synergy|\bshop\b|league|melee/i.test(info))
-    const mode: Mode = isCreature ? creature(c) : isAuto ? auto(c) : classic(c)
+    const pick = pickTactics(info, env.mods)
+    const names = classLabels(info)
+    c.rules = pick.rules
+    c.collect = pick.collect
+    c.lab = (cl) => names?.[LABEL_ORDER.indexOf(cl)] ?? CLS[cl].label
+    const mode: Mode = pick.kind === 'creature' ? creature(c) : pick.kind === 'auto' ? auto(c) : classic(c)
     ptr.onDown((p) => { if (p.button !== 2) mode.click(p.x, p.y) })
     k.onKey((e) => mode.key(e.code))
     const lp = loop((dt) => { fx.update(dt); shake.update(dt); mode.update(dt) }, () => mode.draw())

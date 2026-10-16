@@ -113,3 +113,11 @@ export function reachable(spec: MapSpec, from: number): Set<number> {
   }
   return seen
 }
+
+/** Hex tiles, or a turn-based 4X (pause-and-plan turns with decrees) for empire / dynasty style games; otherwise real-time planets. */
+export function pickConquest(info: string, mods: ReadonlySet<string>): { hex: boolean; turn: boolean } {
+  const s = info.toLowerCase()
+  const hex = mods.has('hex') || /hex/.test(s)
+  const turn = !hex && /4x|turn|dynast|grand strategy|diplomac|empire|dominion|succession|vassal|council|intrigue|civiliz|khanate|expansion|city-state|collapse|influence|politics|colonizers|colonial|unify|archipelago|shogunate|clan|reign|realm|sea lords|stone age|tribe|river valleys|cold war|partition/.test(s)
+  return { hex, turn }
+}

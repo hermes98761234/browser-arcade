@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { makeRng } from '../kit'
-import { bfsField, computeFov, findPath, genLevel, los, type LevelKind } from './roguelike'
+import { bfsField, computeFov, findPath, genLevel, los, pickRogue, type LevelKind } from './roguelike'
 
 describe('roguelike levels', () => {
   for (const kind of ['bsp', 'cave', 'maze'] as LevelKind[]) {
@@ -53,5 +53,26 @@ describe('fov and paths', () => {
     const p = findPath(t, w, h, { x: 5, y: 3 }, { x: 12, y: 3 }, (i) => t[i] === 1)
     expect(p.length).toBeGreaterThan(7)
     expect(p[p.length - 1]).toEqual({ x: 12, y: 3 })
+  })
+})
+
+describe('roguelike variants', () => {
+  it('picks variants from game text', () => {
+    const none = new Set<string>()
+    expect(pickRogue('Dungeon Duo tank and healer roles', none, 'fantasy').ally).toBe('healer')
+    expect(pickRogue("Wizard's Descent spell roguelike", none, 'fantasy').spells).toBe('wizard')
+    expect(pickRogue('Rogue Archer bow combat dungeons', none, 'fantasy').bow).toBe(true)
+    expect(pickRogue('Cat Burglar Night sneak through mansion rooftops', none, 'fantasy').stealth).toBe(true)
+    expect(pickRogue('Noise Meter every footstep makes sound ripples', none, 'fantasy').noise).toBe(true)
+    expect(pickRogue('One Room Dungeon single-screen rogue', none, 'fantasy').kind).toBe('room')
+    expect(pickRogue('Slayer\'s Contract accept bounties on monsters', none, 'fantasy').contract).toBe(true)
+    expect(pickRogue('ASCII Depths classic roguelike', none, 'fantasy').ascii).toBe(true)
+  })
+  it('a room level is walkable from start to stairs', () => {
+    for (let seed = 1; seed < 40; seed++) {
+      const lv = genLevel(makeRng(seed), 28, 13, 'room')
+      const d = bfsField(lv.tiles, lv.w, lv.h, lv.start.x, lv.start.y, 999)
+      expect(d[lv.stairs.y * lv.w + lv.stairs.x]).toBeGreaterThan(5)
+    }
   })
 })

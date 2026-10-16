@@ -1,4 +1,5 @@
-// Handwritten card deck and flavour tables for the Reigns-style engine.
+// Handwritten card deck and flavour tables for the Reigns-style engine (setting-specific decks live in reignsMore.ts).
+import { pickMore } from './reignsMore'
 // Meter order everywhere: [institution, people, power, wealth].
 
 export type Fx = [number, number, number, number]
@@ -19,6 +20,8 @@ export interface Flavor {
   roles: Record<string, [string, string]>
   end: string[] // low0, low1, low2, low3, high0, high1, high2, high3
   intro: string
+  /** Setting-specific deck (otherwise the leader or life deck is used). */
+  deck?: Card[]
 }
 
 const COMMON_ROLES = { J: ['🤡', 'The Jester'], S: ['🥷', 'The Spy'], M: ['🧑‍💼', 'The Merchant'], O: ['🔮', 'The Oracle'], N: ['🤵', 'A Noble'], Q: ['👸', 'Your Spouse'], X: ['🕴️', 'A Stranger'], D: ['🐉', 'Kevin the Dragon'] } as const
@@ -118,6 +121,8 @@ export const FLAVORS: Record<string, Flavor> = {
 }
 
 export const pickFlavor = (name: string, themeId: string): Flavor => {
+  const more = pickMore(name)
+  if (more) return more
   const s = name.toLowerCase()
   if (/mayor|campaign|parliament|senate|election|president|council|press|spin|lobby|referendum|republic|constitution|tax code|paperwork|diplomat|swing|dictator|coup|revolution|banana|budget|town hall|crisis|polling|filibuster|ministry/.test(s)) return FLAVORS.politics
   if (/apartment|college|nurse|family|hermit|influencer|roommate|suburbia|life|years|diary|housemate|cat lady|lighthouse|generations|living|island hermit/.test(s) || themeId === 'cozy') return FLAVORS.life

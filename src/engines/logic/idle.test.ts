@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bulkCost, fmt, maxAffordable, pickFlavor, pickMode, unitCost } from './idle'
+import { bulkCost, fmt, maxAffordable, pickFlavor, pickMode, pickShop, pickTrade, unitCost } from './idle'
 
 describe('idle logic', () => {
   it('formats numbers', () => {
@@ -18,10 +18,23 @@ describe('idle logic', () => {
   })
   it('picks flavor and mode from keywords', () => {
     expect(pickFlavor('Black Hole Bakery').unit).toBe('loaves')
-    expect(pickFlavor('Planet Terraformer').coin).toBe('💫')
+    expect(pickFlavor('Planet Terraformer').coin).toBe('🌍')
     expect(pickMode('Coffee Shop Barista', new Set())).toBe('shop')
     expect(pickMode('Space Trader', new Set(['trade']))).toBe('trade')
     expect(pickMode('Idle Farm Valley', new Set(['farm']))).toBe('farm')
     expect(pickMode('Cookie Empire', new Set())).toBe('idle')
+  })
+  it('routes management sims to fitting modes and names', () => {
+    const none = new Set<string>()
+    expect(pickMode('Hospital Manager treat patients', none)).toBe('shop')
+    expect(pickShop('Hospital Manager treat patients').who).toBe('patients')
+    expect(pickMode('Stock Market Sim trade stocks', none)).toBe('trade')
+    expect(pickTrade('Stock Market Sim trade stocks').cargo).toBe('Portfolio')
+    expect(pickMode('Space Colony manage oxygen & food', none)).toBe('colony')
+    expect(pickMode('Pocket Metropolis tiny city on a 10x10 grid', none)).toBe('build')
+    expect(pickMode('Idle Wizard Academy train wizards', none)).toBe('idle')
+    expect(pickFlavor('Mini Football Manager').unit).toBe('fans')
+    expect(pickFlavor('Idle Train Network rail empire').prod[3][0]).toBe('Station')
+    expect(pickMode('Cookie Empire click cookies', none)).toBe('idle')
   })
 })

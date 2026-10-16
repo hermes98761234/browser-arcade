@@ -223,7 +223,41 @@ export const WASTE: Ev[] = [
     ch('Race them', [[0.5, 'Victory dust!', { m: 6 }], [0.5, 'You hit a dust devil. It won.', { hit: 8, w: -6 }]])),
 ]
 
-export type Kind = 'trail' | 'desert' | 'sea' | 'space' | 'waste'
+export const ARCTIC: Ev[] = [
+  ev('a-blizzard', 'A whiteout blizzard. You can see your hand. Barely. It is waving.',
+    ch('Dig in and wait', [[1, 'Two days under a snow roof. Cosy, in a damp way.', { day: 2, m: -2, f: -8 }]]),
+    ch('Push through', [[0.5, 'Pure grit! A lot of frost.', { dist: 8, h: -8 }], [0.5, 'You walk in a circle. A big, proud circle.', { day: 1, hit: 10 }]])),
+  ev('a-track', 'Huge footprints in the snow. Bigger than a boot. Bigger than a bucket.',
+    ch('Follow them', [[0.4, 'You find a sleepy, shaggy, very polite yeti. He shares his tea.', { m: 12, f: 10 }], [0.6, 'The prints end at a cliff. Which is rude.', { day: 1, m: -4 }]]),
+    ch('Photograph them', [[1, 'Blurry, but convincing. Fame! Maybe.', { m: 6, $: 15 }]]),
+    ch('Avoid them', [[1, 'Better safe than sasquatched.', {}]])),
+  ev('a-crevasse', 'A crevasse cuts across the trail. Blue. Bottomless. Deeply judgemental.',
+    ch('Build a bridge', [[0.6, 'A wobbly ski bridge. It holds!', { day: 1, w: -6 }], [0.4, 'It does not. You lose a ski, a sled, a sandwich.', { hit: 12, f: -10 }]]),
+    ch('Detour', [[1, 'Three hours, one detour, zero falls.', { day: 1, f: -6 }]])),
+  ev('a-wolf', 'Wolves trail you at a polite distance. Always the same distance.',
+    ch('Feed them', [[1, 'The wolves nod. And leave.', { f: -12, m: 4 }]]),
+    ch('Light a fire', [[0.7, 'The fire holds them off.', { w: -10 }], [0.3, 'The wolves are unimpressed.', { hit: 12 }]])),
+  ev('a-hut', 'A trapper\'s hut: smoke from the chimney, a goat on the roof. A sign: "Come in, I\'m probably nice".',
+    ch('Stay the night', [[0.8, 'Hot stew, soft furs, a lot of goat stories.', { h: 10, m: 8, f: -6 }], [0.2, 'He is nice. But the goat steals your gloves.', { h: 6, m: -2 }]]),
+    ch('Trade furs', [[1, 'A fair deal, a better handshake.', { $: 25, f: 8 }]])),
+  ev('a-aurora', 'The aurora blazes overhead. The sled dogs howl in harmony. Nobody asked for the choir.',
+    ch('Watch it', [[1, 'Everyone sits in awe. Morale soars.', { m: 12, day: 1 }]]),
+    ch('Keep walking', [[1, 'Beautiful, but you have places to be.', { m: 2, dist: 4 }]])),
+  ev('a-ice', 'The river ice creaks. It is probably ice. It is probably thick. Probably.',
+    ch('Cross carefully', [[0.7, 'Tip-toe triumph.', { dist: 6 }], [0.3, 'Crack! A very cold swim.', { hit: 14, f: -8, w: -6 }]]),
+    ch('Go around', [[1, 'A long loop. A dry loop.', { day: 1 }]])),
+  ev('a-frost', '{M} cannot feel their toes. They are not alarmed. That is alarming.',
+    ch('Warm them up', [[1, 'Furs, a fire and an apologetic cough.', { w: -8, h: 6 }]]),
+    ch('Press on', [[0.5, 'Toes: fine. Mostly.', { m: -3 }], [0.5, 'Frostbite sets in.', { sick: true }]])),
+  ev('a-avalanche', 'A rumble on the slope above. The kind with snowy consequences.',
+    ch('Run sideways', [[0.7, 'You skim out of the way. A close one.', { m: 6 }], [0.3, 'A snow-pillow hits the sled.', { hit: 12, f: -10 }]]),
+    ch('Shout', [[0.3, 'It stops. Nobody knows why.', { m: 8 }], [0.7, 'Shouting is a poor idea.', { hit: 16, f: -12 }]])),
+  ev('a-sled', 'The sled dogs refuse to go on. They have formed a circle. They are discussing.',
+    ch('Treat them', [[1, 'Bribed with jerky. They resume.', { f: -8, m: 3 }]]),
+    ch('Pull the sled yourself', [[1, 'A new respect for dogs.', { h: -8, dist: 4 }]])),
+]
+
+export type Kind = 'trail' | 'desert' | 'sea' | 'space' | 'waste' | 'arctic'
 export interface JFlavor {
   kind: Kind
   V: string
@@ -249,6 +283,7 @@ export const JFLAVORS: Record<Kind, JFlavor> = {
   desert: { kind: 'desert', V: 'caravan', vEmoji: '🐪', F: 'food', W: 'water', $: 'silver', wIcon: '💧', fIcon: '🍞', disease: 'sun fever', from: 'Salt Road', to: 'the Golden City', towns: ['Salt Well', 'Dune Gate', 'Amber Oasis', 'Sand Bazaar', 'Red Mesa', 'Palm Rest', 'Mirage Camp', 'Cobalt Wells', 'Jackal Post', 'Silk Crossing', 'Sunset Souk', 'Star Cistern'], names: NAMES, events: [...UNIVERSAL, ...LAND, ...DESERT], intro: 'Lead the caravan across the dunes.' },
   sea: { kind: 'sea', V: 'ship', vEmoji: '⛵', F: 'biscuits', W: 'fresh water', $: 'doubloons', wIcon: '💧', fIcon: '🍪', disease: 'scurvy', from: 'Port Haven', to: 'Treasure Isle', towns: ['Barnacle Bay', 'Coral Cove', 'Rum Harbor', 'Tortuga Rest', 'Gull Point', 'Shipwreck Isle', 'Lantern Port', 'Storm Quay', 'Kraken Reach', 'Pearl Dock', 'Cutlass Cay', 'Siren Rock'], names: ['Barnaby', 'Salty Sue', 'One-Eye Joe', 'Mabel', 'Pegleg Pete', 'Anne', 'Bosun Bill', 'Coral', 'Finn', 'Mad Mags', 'Squid', 'Rosie', 'Jack', 'Tilly', 'Ned', 'Calico'], events: [...UNIVERSAL, ...SEA], intro: 'Sail your crew across the seas.' },
   space: { kind: 'space', V: 'starship', vEmoji: '🚀', F: 'rations', W: 'fuel', $: 'credits', wIcon: '⛽', fIcon: '🥫', disease: 'void sickness', from: 'Earth Dock', to: 'the Far Colony', towns: ['Luna Port', 'Ceres Station', 'Titan Dock', 'Ganymede Hub', 'Callisto Rest', 'Europa Ice', 'Vesta Yard', 'Triton Gate', 'Pluto Post', 'Kuiper Camp', 'Oort Relay', 'Alpha Gate'], names: ['Nova', 'Kai', 'Lyra', 'Orion', 'Vega', 'Zed', 'Astra', 'Rex', 'Juno', 'Cass', 'Echo', 'Sol', 'Tara', 'Quin', 'Io', 'Pax'], events: [...UNIVERSAL, ...SPACE], intro: 'Pilot the starship to the far colony.' },
+  arctic: { kind: 'arctic', V: 'dog sled', vEmoji: '🛷', F: 'food', W: 'firewood', $: 'furs', wIcon: '🔥', fIcon: '🥩', disease: 'frostbite', from: 'Base Camp', to: 'the Yeti Valley', towns: ['Igloo Rest', 'Pine Hut', 'Frozen Ford', 'Glacier Post', 'Husky Camp', 'Ice Fall', 'Aurora Lodge', 'Snow Gate', 'Trapper Bend', 'Crystal Cave', 'Summit Camp', 'White Hollow'], names: ['Nanuk', 'Frida', 'Bjorn', 'Sasha', 'Oleg', 'Ingrid', 'Tove', 'Anya', 'Sven', 'Mira', 'Kai', 'Lars', 'Yuki', 'Noor', 'Piotr', 'Elsa'], events: [...UNIVERSAL, ...LAND, ...ARCTIC], intro: 'Lead the sled team through the blizzards.' },
   waste: { kind: 'waste', V: 'convoy', vEmoji: '🚙', F: 'cans', W: 'fuel', $: 'caps', wIcon: '⛽', fIcon: '🥫', disease: 'rad sickness', from: 'Vault Nine', to: 'the Green Haven', towns: ['Rust Hollow', 'Scrap Town', 'Glow Ridge', 'Dust Junction', 'Neon Ruins', 'Mutant Mill', 'Bolt City', 'Static Ridge', 'Ash Crossing', 'Camp Salvage', 'Iron Gulch', 'Green Edge'], names: ['Rook', 'Sparks', 'Mags', 'Dutch', 'Rusty', 'Nix', 'Gizmo', 'Vera', 'Bolt', 'Ash', 'Tank', 'Flint', 'Zip', 'Moss', 'Cinder', 'Dot'], events: [...UNIVERSAL, ...LAND, ...WASTE], intro: 'Drive the convoy to safety.' },
 }
 
@@ -256,6 +291,7 @@ export function pickKind(text: string, themeId: string): Kind {
   const s = text.toLowerCase()
   if (/space|starship|orbit|comet|colony|mars|solar|probe|voyager|generation ship|exoplanet|derelict/.test(s)) return 'space'
   if (/convoy|wasteland|bunker|ash |rad |geiger|apocalyp/.test(s)) return 'waste'
+  if (/yeti|blizzard|arctic|polar|sled|glacier|snow|ice /.test(s) || themeId === 'arctic') return 'arctic'
   if (/caravan|desert|salt road|dune|oasis|bazaar|spice|camel/.test(s)) return 'desert'
   if (/pirate|sail|ship|harbor|barge|tide|regatta|kraken|voyage|bottle|fleet/.test(s)) return 'sea'
   if (themeId === 'space') return 'space'
@@ -264,4 +300,4 @@ export function pickKind(text: string, themeId: string): Kind {
   return 'trail'
 }
 
-export const ALL_EVENTS = [...UNIVERSAL, ...LAND, ...TRAIL, ...DESERT, ...SEA, ...SPACE, ...WASTE]
+export const ALL_EVENTS = [...UNIVERSAL, ...LAND, ...TRAIL, ...DESERT, ...SEA, ...SPACE, ...WASTE, ...ARCTIC]

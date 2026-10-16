@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { makeRng } from '../kit'
-import { connected, genCreature, genTerrain, moveDamage, pathTo, reach, typeMult } from './tactics'
+import { classLabels, connected, genBridge, genCreature, genTerrain, moveDamage, pathTo, pickTactics, reach, typeMult } from './tactics'
 
 describe('tactics logic', () => {
   it('terrain always links the two spawn zones', () => {
@@ -28,5 +28,22 @@ describe('tactics logic', () => {
     const a = genCreature(r, 'x', 5, 'fire')
     const d = genCreature(r, 'y', 5, 'plant')
     expect(moveDamage(a, d, a.moves[0], 0.5)).toBeGreaterThan(moveDamage(d, a, d.moves[0], 0.5))
+  })
+})
+
+describe('tactics routing', () => {
+  it('picks kind, rules and labels from the game text', () => {
+    expect(pickTactics('Chrono Gambit rewind one turn per battle', new Set()).rules.has('rewind')).toBe(true)
+    expect(pickTactics('Monsoon Front weather fronts alter each turn', new Set()).rules.has('weather')).toBe(true)
+    expect(pickTactics('Fruit Fighters fruit units with juicy synergies', new Set()).kind).toBe('auto')
+    const c = pickTactics('Pebble Pets collect living stones with traits', new Set())
+    expect(c.kind).toBe('creature')
+    expect(c.collect).toBe(true)
+    expect(classLabels('Pawnstorm Tactics chess pieces')?.[0]).toBe('Pawn')
+  })
+  it('bridge maps are connected only over the bridges', () => {
+    const t = genBridge(makeRng(3), 14, 8)
+    expect(connected(t, 14, 8, 0, 2, 13, 2)).toBe(true)
+    expect(t.filter((v) => v === 2).length).toBe(12)
   })
 })

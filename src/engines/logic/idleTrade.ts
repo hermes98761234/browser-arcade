@@ -14,7 +14,11 @@ export class Market {
   events: MarketEvent[] = []
   goods: Good[]
   private rng: Rng
-  constructor(goods: Good[], rng: Rng) {
+  upText: string
+  downText: string
+  constructor(goods: Good[], rng: Rng, upText = 'shortage! Prices soar.', downText = 'glut! Prices crash.') {
+    this.upText = upText
+    this.downText = downText
     this.goods = goods
     this.rng = rng
     this.amp = goods.map(() => rng.range(0.28, 0.45))
@@ -37,7 +41,7 @@ export class Market {
       const i = this.rng.int(0, this.goods.length - 1)
       const up = this.rng.chance(0.5)
       const g = this.goods[i]
-      this.events.push({ good: i, mult: up ? 1.55 : 0.55, days: 4, text: up ? `${g.emoji} ${g.name} shortage! Prices soar.` : `${g.emoji} ${g.name} glut! Prices crash.` })
+      this.events.push({ good: i, mult: up ? 1.55 : 0.55, days: 4, text: up ? `${g.emoji} ${g.name} ${this.upText}` : `${g.emoji} ${g.name} ${this.downText}` })
       news = this.events[this.events.length - 1].text
     }
     this.goods.forEach((g, i) => {

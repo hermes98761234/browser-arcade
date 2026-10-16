@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { makeRng } from '../kit'
-import { genHex, genPlanets, reachable } from './conquest'
+import { genHex, genPlanets, pickConquest, reachable } from './conquest'
 
 describe('conquest maps', () => {
   it('free-form map has distinct starts and no overlapping planets', () => {
@@ -19,5 +19,14 @@ describe('conquest maps', () => {
       const reach = reachable(m, starts[0].id)
       for (const st of starts) expect(reach.has(st.id)).toBe(true)
     }
+  })
+})
+
+describe('conquest mode', () => {
+  it('routes 4X games to turns and hex games to hex', () => {
+    expect(pickConquest('Pocket Empires 30-turn mini 4X matches', new Set()).turn).toBe(true)
+    expect(pickConquest('Panzer Hex Front', new Set(['hex']))).toEqual({ hex: true, turn: false })
+    expect(pickConquest('Mini RTS Battle small-scale RTS', new Set()).turn).toBe(false)
+    expect(pickConquest('Barnacle Battle cling and defend hull territory', new Set()).turn).toBe(false)
   })
 })

@@ -1,8 +1,9 @@
 // Idle / tycoon: classic clicker (producers, upgrades, goals, prestige) plus farm, trade and shop sub-modes.
 import { byDiff, createDom, type Engine } from '../kit'
-import { fmt, MENUS, CROPS, GOODS, pickFlavor, pickMode, pickTable, type Mode } from '../logic/idle'
+import { fmt, CROPS, hasDeadline, pickFlavor, pickMode, pickShop, pickTable, pickTrade, type Mode } from '../logic/idle'
 import { Econ, type Upg } from '../logic/idleEcon'
 import { Market } from '../logic/idleTrade'
+import { City, Colony, hasHazard, isBigGrid, MAX_LV, pickBuild, pickColony } from '../logic/idleSim'
 
 const CSS = `
 .idl{font-family:system-ui,sans-serif;display:flex;flex-direction:column;gap:8px;padding:10px;box-sizing:border-box;user-select:none;-webkit-user-select:none}
@@ -41,6 +42,14 @@ const CSS = `
 .idl .cust.empty{opacity:.25;cursor:default;display:grid;place-items:center}
 .idl .cust .face{font-size:38px}
 .idl .cust .ord{font-size:26px;margin:4px 0}
+.idl .bgrid{display:grid;gap:3px;width:100%;max-width:520px;margin:0 auto}
+.idl .tile{aspect-ratio:1;border-radius:8px;border:1px solid color-mix(in srgb,var(--g-fg) 20%,transparent);background:color-mix(in srgb,var(--g-fg) 8%,transparent);color:var(--g-fg);cursor:pointer;padding:0;position:relative;display:grid;place-items:center;font-size:30px;line-height:1;min-width:0}
+.idl .tile.s10{font-size:20px;border-radius:5px}
+.idl .tile.fx{outline:2px solid var(--g-danger)}
+.idl .tile small{position:absolute;right:2px;bottom:0;font-size:9px;color:var(--g-accent2)}
+.idl .pal{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin-top:6px}
+.idl .pal .btn{padding:6px 8px}
+.idl .need{display:block;width:100%;margin-bottom:6px}
 .idl .tray{min-height:48px;border:2px dashed color-mix(in srgb,var(--g-fg) 30%,transparent);border-radius:12px;padding:6px 10px;font-size:30px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 `
 
@@ -88,7 +97,8 @@ const engine: Engine = {
       return b
     }
 
-    const goal = byDiff(env, ...({ idle: [3e5, 2e6, 1e7], farm: [3000, 8000, 20000], trade: [2500, 4500, 8000], shop: [700, 1200, 2000] }[mode] as [number, number, number]))
+    const deadline = mode === 'idle' && hasDeadline(info)
+    const goal = deadline ? byDiff(env, 1.2e5, 6e5, 3e6) : byDiff(env, ...({ idle: [3e5, 2e6, 1e7], farm: [3000, 8000, 20000], trade: [2500, 4500, 8000], shop: [700, 1200, 2000], build: [15000, 40000, 90000], colony: [3000, 5000, 8000] }[mode] as [number, number, number]))
     const toast = (s: string) => {
       const t = el('div', 'toast', s, root)
       later(() => t.remove(), 2700)
@@ -140,7 +150,7 @@ const engine: Engine = {
       const heroB = el('button', 'hero', th.hero, left)
       heroB.type = 'button'
       const perClick = el('div', 'sub', '', left)
-      el('div', 'sub', `Tap ${th.hero} to earn ${flavor.unit}`, left).style.marginTop = '6px'
+      el('div', 'sub', `Tap ${th.hero} to ${flavor.act ?? `earn ${flavor.unit}`}`, left).style.marginTop = '6px'
       const clickFx = (x: number, y: number, v: number) => {
         const f = el('div', 'fl', `+${fmt(v)}`, left)
         f.style.left = `${x}px`
@@ -268,12 +278,23 @@ const engine: Engine = {
       }
       refreshAll()
       let acc = 0
+      let left_ = byDiff(env, 900, 720, 600)
       let goldT = rand(40, 70)
       return {
         root: r,
         head: flavor.coin,
         tick(dt) {
           ec.tick(dt)
+          if (deadline) {
+            left_ -= dt
+            if (left_ <= 0 && !finishing && !reached) {
+              finishing = true
+              const sc = Math.floor(ec.earned)
+              env.score(sc)
+              env.sfx('lose')
+              env.end({ score: sc, won: false, text: `Time ran out at ${fmt(ec.earned)} of ${fmt(goal)}` })
+            }
+          }
           acc += dt
           goldT -= dt
           if (goldT <= 0) {
@@ -294,7 +315,7 @@ const engine: Engine = {
         },
         money: () => ec.money,
         progress: () => ec.earned,
-        rate: () => `${fmt(ec.cps())} ${flavor.unit}/s`,
+        rate: () => `${fmt(ec.cps())} ${flavor.unit}/s${deadline ? `  ·  ⏳ ${Math.max(0, Math.ceil(left_))}s` : ''}`,
         refresh: refreshAll,
       }
     }
@@ -466,9 +487,9 @@ const engine: Engine = {
 
     // ---------- trade ----------
     const trade = (): Mode_ => {
-      const gl = pickTable(GOODS, info)
-      const goods = gl.map(([name, emoji, base]) => ({ name, emoji, base }))
-      const mk = new Market(goods, env.rng)
+      const tt = pickTrade(info)
+      const goods = tt.list.map(([name, emoji, base]) => ({ name, emoji, base }))
+      const mk = new Market(goods, env.rng, tt.up, tt.down)
       const maxDays = byDiff(env, 80, 70, 60)
       let cash = 300
       let cap = 20
@@ -484,7 +505,7 @@ const engine: Engine = {
       dayEl.style.fontWeight = '700'
       const capEl = el('div', 'sub', '', info1)
       btn('Next day ⏭', info1, () => advance())
-      const news = el('div', 'sub', 'Markets open. Buy low, sell high!', r)
+      const news = el('div', 'sub', tt.intro, r)
       news.style.margin = '4px 0 8px'
       const rows = goods.map((g, i) => {
         const row = el('div', 'row', '', r)
@@ -547,8 +568,8 @@ const engine: Engine = {
         }
       }
       const refresh = () => {
-        dayEl.textContent = `Day ${mk.day}/${maxDays}   ·   💵 ${fmt(cash)}`
-        capEl.textContent = `Cargo ${used()}/${cap}`
+        dayEl.textContent = `Day ${mk.day}/${maxDays}   ·   ${tt.coin} ${fmt(cash)}`
+        capEl.textContent = `${tt.cargo} ${used()}/${cap}`
         const full = used() >= cap
         goods.forEach((g, i) => {
           const rw = rows[i]
@@ -567,13 +588,13 @@ const engine: Engine = {
           rw.ss.forEach((b) => (b.disabled = !hv.n))
         })
         const c = 250 * 1.8 ** capLv
-        capBtn.textContent = `📦 Bigger wagon +10 cargo  ·  💵${fmt(c)}`
+        capBtn.textContent = `📦 ${tt.big} +10  ·  ${tt.coin}${fmt(c)}`
         capBtn.disabled = cash < c
       }
       refresh()
       return {
         root: r,
-        head: '💵',
+        head: tt.coin,
         tick(dt) {
           dayT += dt
           if (dayT >= dayLen) advance()
@@ -587,7 +608,8 @@ const engine: Engine = {
 
     // ---------- shop ----------
     const shop = (): Mode_ => {
-      const menu = pickTable(MENUS, info)
+      const st = pickShop(info)
+      const menu = st.menu
       const UNLOCK = [0, 0, 0, 80, 220, 450]
       let money = 0
       let earned = 0
@@ -599,13 +621,13 @@ const engine: Engine = {
       let helper = 0
       let helperT = 0
       let served = 0
-      const faces = [...th.heroes, ...th.foes, ...th.items].filter((e) => e !== th.hero)
+      const faces = st.faces ?? [...th.heroes, ...th.foes, ...th.items].filter((e) => e !== th.hero)
       interface Cust { face: string; ord: number[]; pat: number; max: number }
       const cs: (Cust | null)[] = Array(6).fill(null)
       let tray: number[] = []
       const r = el('div', 'cols')
       const left = el('div', 'card', '', r)
-      el('div', 'sub', `${th.hero} Your counter - tap items to prepare, then tap the customer (Enter = serve)`, left)
+      el('div', 'sub', `${th.hero} ${st.counter} (Enter = serve)`, left)
       const mbtns = menu.map(([nm, em, p], i) => {
         const b = btn('', left, () => addItem(i))
         b.style.cssText += ';display:block;width:100%;margin-top:6px'
@@ -676,7 +698,7 @@ const engine: Engine = {
       const serveMatch = () => {
         const i = cs.findIndex((c) => c && same(tray, c.ord))
         if (i >= 0) serve(i)
-        else if (tray.length) { tray = []; env.sfx('hit'); toast('Nobody ordered that'); refresh() }
+        else if (tray.length) { tray = []; env.sfx('hit'); toast(`No ${st.who.replace(/s$/, '')} wants that`); refresh() }
       }
       const onKey = (e: KeyboardEvent) => {
         if (e.code >= 'Digit1' && e.code <= 'Digit6') addItem(Number(e.code.slice(5)) - 1)
@@ -702,7 +724,7 @@ const engine: Engine = {
         })
         trayEl.textContent = tray.length ? tray.map((i) => menu[i][1]).join(' ') : 'Tray is empty'
         trayEl.style.fontSize = tray.length ? '30px' : '13px'
-        repEl.textContent = `Reputation ${Math.round(rep)}%  ·  served ${served}`
+        repEl.textContent = `Reputation ${Math.round(rep)}%  ·  ${st.done} ${served}`
         repFill.style.width = `${rep}%`
         repFill.style.background = rep < 30 ? 'var(--g-danger)' : 'var(--g-accent)'
         cs.forEach((c, i) => {
@@ -738,7 +760,7 @@ const engine: Engine = {
             c.pat -= dt
             if (c.pat <= 0) {
               cs[i] = null; rep -= 14; changed = true
-              toast(`${c.face} left angry!`); env.sfx('lose')
+              toast(`${c.face} left unhappy!`); env.sfx('lose')
             }
           })
           if (helper > 0) {
@@ -760,13 +782,192 @@ const engine: Engine = {
         },
         money: () => money,
         progress: () => earned,
-        rate: () => `${served} served`,
+        rate: () => `${served} ${st.done}`,
         refresh,
         destroyExtra: () => window.removeEventListener('keydown', onKey),
       } as Mode_ & { destroyExtra: () => void }
     }
 
-    const m = (mode === 'farm' ? farm : mode === 'trade' ? trade : mode === 'shop' ? shop : classic)()
+    // ---------- build (grid city / park / outpost builder) ----------
+    const build = (): Mode_ => {
+      const bt = pickBuild(info)
+      const hazardOn = hasHazard(info)
+      const n = isBigGrid(info) ? 10 : 6
+      const city = new City(n)
+      let sel = 0
+      let demo = false
+      let hazT = byDiff(env, 90, 70, 55)
+      let hits = 0
+      const HINT = ['+ next to parks', '+ next to homes', 'noisy near homes', 'earns from adjacent homes', 'boosts adjacent homes', 'shields neighbours']
+      const r = el('div', 'cols')
+      const left = el('div', 'card', '', r)
+      el('div', 'sub', 'BUILD (1-6), then tap an empty tile', left)
+      const palBox = el('div', 'pal', '', left)
+      const pal = bt.kinds.map(([nm, em], k) => {
+        const b = btn('', palBox, () => { sel = k; demo = false; refresh() })
+        b.title = HINT[k]
+        return { b, nm, em, k }
+      })
+      const tool = btn('🧹 Demolish (refund 40%)', palBox, () => { demo = !demo; refresh() })
+      const hint = el('div', 'sub', '', left)
+      hint.style.marginTop = '6px'
+      const stats = el('div', 'sub', '', left)
+      stats.style.marginTop = '8px'
+      const right = el('div', 'card', '', r)
+      const note = el('div', 'sub', 'Tap a building to upgrade it (max level ' + MAX_LV + ').', right)
+      note.style.marginBottom = '6px'
+      const grid = el('div', 'bgrid', '', right)
+      grid.style.gridTemplateColumns = `repeat(${n},1fr)`
+      const tiles = city.cells.map((_c, i) => {
+        const b = el('button', 'tile' + (n > 6 ? ' s10' : ''), '', grid)
+        b.type = 'button'
+        b.addEventListener('click', () => poke(i))
+        return b
+      })
+      const poke = (i: number) => {
+        const t = city.cells[i]
+        if (!t) {
+          if (demo) return
+          if (city.build(i, sel)) env.sfx('point'); else { env.sfx('hit'); toast(`Need ${bt.coin} ${fmt(city.buildCost(sel))}`) }
+        } else if (demo) { city.demolish(i); env.sfx('click') } else if (city.upgrade(i)) env.sfx('power')
+        else if (t.lv < MAX_LV) { env.sfx('hit'); toast(`Upgrade costs ${bt.coin} ${fmt(city.upCost(i))}`) }
+        refresh()
+      }
+      const onKey = (e: KeyboardEvent) => {
+        if (e.code >= 'Digit1' && e.code <= 'Digit6') { sel = Number(e.code.slice(5)) - 1; demo = false; refresh() } else if (e.code === 'KeyX') { demo = !demo; refresh() }
+      }
+      window.addEventListener('keydown', onKey)
+      const refresh = () => {
+        pal.forEach((p) => {
+          p.b.classList.toggle('on', sel === p.k && !demo)
+          p.b.disabled = city.money < city.buildCost(p.k)
+          p.b.textContent = `${p.k + 1} ${p.em} ${p.nm} · ${bt.coin}${fmt(city.buildCost(p.k))}`
+        })
+        tool.classList.toggle('on', demo)
+        hint.textContent = demo ? 'Tap a building to remove it.' : `${bt.kinds[sel][0]}: ${HINT[sel]}`
+        city.cells.forEach((t, i) => {
+          const b = tiles[i]
+          b.textContent = t ? bt.kinds[t.k][1] : ''
+          if (t) {
+            const sm = el('small', '', '★'.repeat(t.lv), b)
+            sm.title = `+${city.tileIncome(i).toFixed(1)}/s`
+          }
+          b.title = t ? `${bt.kinds[t.k][0]} +${city.tileIncome(i).toFixed(1)}/s` : ''
+        })
+        stats.textContent = `${bt.pop}: ${fmt(city.population())}  ·  ${fmt(city.income())} ${bt.unit}/s${hazardOn ? `  ·  ⚠️ ${bt.hazard} in ${Math.ceil(hazT)}s` : ''}`
+      }
+      refresh()
+      let acc = 0
+      return {
+        root: r,
+        head: bt.coin,
+        tick(dt) {
+          city.tick(dt)
+          if (hazardOn) {
+            hazT -= dt
+            if (hazT <= 0) {
+              hazT = byDiff(env, 90, 70, 55)
+              hits++
+              const gone = city.strike(2 + Math.floor(hits / 2), Math.random)
+              if (gone.length) { toast(`⚠️ ${bt.hazard}! Lost ${gone.length} buildings`); env.sfx('boom'); refresh() }
+            }
+          }
+          acc += dt
+          if (acc > 0.25) { acc = 0; refresh() }
+        },
+        money: () => city.money,
+        progress: () => city.earned,
+        rate: () => `${fmt(city.income())} ${bt.unit}/s · ${bt.pop} ${fmt(city.population())}`,
+        refresh,
+        destroyExtra: () => window.removeEventListener('keydown', onKey),
+      } as Mode_ & { destroyExtra: () => void }
+    }
+
+    // ---------- colony (keep the needs up while the population grows) ----------
+    const colony = (): Mode_ => {
+      const ct = pickColony(info)
+      const c = new Colony()
+      let incT = byDiff(env, 50, 40, 32)
+      const r = el('div', 'cols')
+      const left = el('div', 'card', '', r)
+      el('div', 'sub', `NEEDS - tap one (or press 1-4) to fix it by hand`, left)
+      const nb = ct.needs.map(([nm, em], i) => {
+        const b = btn('', left, () => { if (c.boost(i)) env.sfx('click'); refresh() })
+        b.classList.add('need')
+        const t = el('div', '', '', b)
+        const bar = el('div', 'bar', '', b)
+        const fill = el('i', '', '', bar)
+        return { b, t, fill, nm, em }
+      })
+      const popEl = el('div', 'sub', '', left)
+      popEl.style.marginTop = '8px'
+      const right = el('div', 'card', '', r)
+      el('div', 'sub', 'BUILD SUPPLY', right)
+      const mb = ct.makers.map(([nm, em], i) => {
+        const b = btn('', right, () => { if (c.buyMaker(i)) env.sfx('power'); refresh() })
+        b.classList.add('need')
+        b.style.marginTop = '6px'
+        return { b, nm, em, i }
+      })
+      const homeB = btn('', right, () => { if (c.buyHome()) env.sfx('power'); refresh() })
+      homeB.classList.add('need')
+      const autoB = btn('', right, () => { if (c.buyAuto()) env.sfx('power'); refresh() })
+      autoB.classList.add('need')
+      const onKey = (e: KeyboardEvent) => {
+        if (e.code >= 'Digit1' && e.code <= 'Digit4') { if (c.boost(Number(e.code.slice(5)) - 1)) env.sfx('click'); refresh() }
+      }
+      window.addEventListener('keydown', onKey)
+      const refresh = () => {
+        nb.forEach((n, i) => {
+          const v = c.needs[i]
+          n.t.textContent = `${n.em} ${n.nm}  ${Math.round(v)}%  ${c.net(i) >= 0 ? '▲' : '▼'}`
+          n.fill.style.width = `${v}%`
+          n.fill.style.background = v < 25 ? 'var(--g-danger)' : v < 50 ? '#facc15' : 'var(--g-good)'
+        })
+        popEl.textContent = `${ct.pop}: ${c.pop}/${c.cap()}${c.dieT > 0 ? '  ·  ⚠️ dying!' : ''}${c.dead ? `  ·  lost ${c.dead}` : ''}`
+        mb.forEach((m) => {
+          m.b.textContent = `${m.em} ${m.nm} lv${c.lv[m.i]}  ·  ${ct.coin}${fmt(c.makerCost(m.i))}   (${ct.needs[m.i][0]} +${c.supply(m.i).toFixed(1)}/s)`
+          m.b.disabled = c.money < c.makerCost(m.i)
+        })
+        homeB.textContent = `${ct.home[1]} ${ct.home[0]} lv${c.housing} (+3 ${ct.pop})  ·  ${ct.coin}${fmt(c.homeCost())}`
+        homeB.disabled = c.money < c.homeCost()
+        autoB.textContent = `🤝 Efficiency lv${c.auto}/5 (+25% income)  ·  ${ct.coin}${fmt(c.autoCost())}`
+        autoB.disabled = c.money < c.autoCost() || c.auto >= 5
+      }
+      refresh()
+      let acc = 0
+      return {
+        root: r,
+        head: ct.coin,
+        tick(dt) {
+          c.tick(dt)
+          incT -= dt
+          if (incT <= 0) {
+            incT = byDiff(env, 50, 40, 32) + Math.random() * 10
+            const i = Math.floor(Math.random() * 4)
+            c.incident(i)
+            toast(`⚠️ ${ct.event}! ${ct.needs[i][0]} -35`)
+            env.sfx('hit')
+          }
+          if (c.lost && !finishing) {
+            finishing = true
+            const sc = Math.floor(c.earned)
+            env.score(sc)
+            env.sfx('lose')
+            env.end({ score: sc, won: false, text: `Everyone is gone after earning ${fmt(c.earned)}` })
+          }
+          acc += dt
+          if (acc > 0.2) { acc = 0; refresh() }
+        },
+        money: () => c.money,
+        progress: () => c.earned,
+        rate: () => `${fmt(c.income())} ${ct.unit}/s · ${ct.pop} ${c.pop}`,
+        refresh,
+        destroyExtra: () => window.removeEventListener('keydown', onKey),
+      } as Mode_ & { destroyExtra: () => void }
+    }
+
+    const m = ({ farm, trade, shop, build, colony, idle: classic }[mode])()
     body.appendChild(m.root)
     const title = el('div', 'sub', `${env.name}`, hd)
     title.className = 'sub ttl'

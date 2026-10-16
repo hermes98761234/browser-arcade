@@ -42,7 +42,7 @@ const engine: Engine = {
     const sub = (s: string) => s
       .replace(/\{K\}/g, fl.K).replace(/\{R\}/g, fl.R).replace(/\{Cn\}/g, fl.Cn)
       .replace(/\{P\}/g, fl.roles.P[1].replace(/^The /, '')).replace(/\{G\}/g, fl.roles.G[1].replace(/^The /, '')).replace(/\{T\}/g, fl.roles.T[1].replace(/^The /, ''))
-    const deck: Card[] = life ? LIFE_DECK : LEADER_DECK
+    const deck: Card[] = fl.deck ?? (life ? LIFE_DECK : LEADER_DECK)
     const byId = new Map(deck.map((c) => [c.id, c]))
     const goal = byDiff(env, 45, 60, 75)
     const negMul = byDiff(env, 0.8, 1, 1.2)

@@ -1,7 +1,7 @@
 // Dungeon generation, field of view and pathfinding for the roguelike engine (pure, tested).
 import type { Rng } from '../kit'
 
-export type LevelKind = 'bsp' | 'cave' | 'maze'
+export type LevelKind = 'bsp' | 'cave' | 'maze' | 'room'
 export interface Rect { x: number; y: number; w: number; h: number }
 export interface Level {
   w: number
@@ -18,10 +18,27 @@ const idx = (w: number, x: number, y: number) => y * w + x
 
 export function genLevel(rng: Rng, w: number, h: number, kind: LevelKind): Level {
   for (let attempt = 0; attempt < 20; attempt++) {
-    const lv = kind === 'cave' ? genCave(rng, w, h) : kind === 'maze' ? genMaze(rng, w, h) : genBsp(rng, w, h)
-    if (lv && floorCount(lv.tiles) > (w * h) / 8) return finish(lv)
+    const lv = kind === 'cave' ? genCave(rng, w, h) : kind === 'maze' ? genMaze(rng, w, h) : kind === 'room' ? genRoom(rng, w, h) : genBsp(rng, w, h)
+    if (lv && floorCount(lv.tiles) > (kind === 'room' ? 30 : (w * h) / 8)) return finish(lv)
   }
   return finish(genBsp(rng, w, h)!)
+}
+
+/** One big single-screen room with scattered pillars; the hero starts at the left edge. */
+function genRoom(rng: Rng, w: number, h: number): Level {
+  const t = new Uint8Array(w * h)
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) t[idx(w, x, y)] = 1
+  const n = Math.floor((w * h) / 18)
+  for (let i = 0; i < n; i++) {
+    const x = rng.int(3, w - 4)
+    const y = rng.int(2, h - 3)
+    t[idx(w, x, y)] = 0
+    if (rng.chance(0.4)) t[idx(w, Math.min(w - 3, x + 1), y)] = 0
+  }
+  const cy = Math.floor(h / 2)
+  for (let x = 1; x < 4; x++) t[idx(w, x, cy)] = 1
+  const rooms: Rect[] = [{ x: 1, y: cy, w: 1, h: 1 }, { x: 2, y: 1, w: w - 4, h: h - 2 }]
+  return { w, h, tiles: t, start: { x: 1, y: cy }, stairs: { x: w - 2, y: cy }, rooms }
 }
 
 const floorCount = (t: Uint8Array) => t.reduce((a, b) => a + b, 0)
@@ -335,4 +352,64 @@ export function computeFov(tiles: Uint8Array, w: number, h: number, ox: number, 
     }
   }
   for (const [xx, xy, yx, yy] of OCT) cast(1, 1, 0, xx, xy, yx, yy)
+}
+
+
+// ---------- variants from the game text ----------
+export interface RogueOpts {
+  stealth: boolean
+  dark: boolean
+  ascii: boolean
+  kind: LevelKind
+  endless: boolean
+  ally: 'healer' | 'shrine' | 'minion' | 'pet' | null
+  spells: 'wizard' | 'druid' | 'necro' | null
+  bow: boolean
+  dice: boolean
+  errand: boolean
+  contract: boolean
+  timer: boolean
+  air: boolean
+  noise: boolean
+  relic: boolean
+  unknown: boolean
+  rt: boolean
+  chest: boolean
+  gb: boolean
+  compass: boolean
+  chess: boolean
+  emp: boolean
+}
+
+const ASCII_THEMES = new Set(['retro', 'school', 'cyberpunk', 'robot', 'neon'])
+
+export function pickRogue(info: string, mods: ReadonlySet<string>, themeId: string): RogueOpts {
+  const s = info.toLowerCase()
+  const stealth = mods.has('stealth') || /\bsneak|\bstealth|heist|burglar|\bhush\b|vision cone|prison break|ghost protocol|blackout agent|noise meter|smuggler|\bthief\b|invisible hero|undetect/.test(s)
+  const spells = /necro/.test(s) ? 'necro' : /druid|shapeshift/.test(s) ? 'druid' : /wizard|spell|mage|arcane|ember saga|rune|shrine maiden|starlight|sonata/.test(s) ? 'wizard' : null
+  const ally = /lantern pilgrims|escort|fragile/.test(s) ? 'shrine' : /minion|necro|summon|armies/.test(s) ? 'minion' : /hatchling|dragon heir|\bpet\b/.test(s) ? 'pet' : /\bduo\b|party|bonds|twin moons|healer|companion/.test(s) ? 'healer' : null
+  return {
+    stealth,
+    dark: mods.has('dark') || /torch|dark|shadow/.test(s),
+    ascii: ASCII_THEMES.has(themeId) || /ascii|terminal|bash|command|\bmud\b|prompt|rogue-?terminal/.test(s),
+    kind: /labyrinth|maze|minos/.test(s) ? 'maze' : /one room|single-screen|single screen/.test(s) ? 'room' : /cave|catacomb|island|shipwreck|crypt|slime|spider|wasteland|bunker/.test(s) ? 'cave' : 'bsp',
+    endless: mods.has('endless') || mods.has('daily') || mods.has('climb') || /infinite|100 floors/.test(s),
+    ally,
+    spells,
+    bow: /archer|\bbow\b|arrow/.test(s),
+    dice: /\bdice\b/.test(s),
+    errand: /errand|courier|fetch|deliver|\bmail\b/.test(s),
+    contract: /contract|bounty|slayer/.test(s),
+    timer: /timer|sandglass|hourglass|time-limited|goblin/.test(s),
+    air: /air meter|sunken|undersea|underwater/.test(s),
+    noise: stealth && /noise|footstep|hush|library|quiet/.test(s),
+    relic: /\brelics?\b|\bcursed\b|\bcrown\b/.test(s),
+    unknown: /potion|brew|alchem/.test(s),
+    rt: /real-time|realtime/.test(s),
+    chest: /mimic|chest/.test(s),
+    gb: /game boy|palette|four shade/.test(s),
+    compass: /compass|heading/.test(s),
+    chess: /chess/.test(s),
+    emp: stealth && /hack|blackout|power|camera/.test(s),
+  }
 }

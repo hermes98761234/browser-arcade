@@ -1,6 +1,7 @@
 // Conquest: Galcon-style real-time strategy. Planets/castles produce troops; send fleets to capture everything. `hex` = hex-tile territory.
+// 4X / empire games (logic pickConquest) run as turn-based: plan, End turn, a short resolution, with research / recruit / truce decrees and a turn limit.
 import { background, Bag, byDiff, clamp, createStage, emoji, keys, loop, Particles, roundRect, Shake, text, type Engine } from '../kit'
-import { genHex, genPlanets, type MapNode } from '../logic/conquest'
+import { genHex, genPlanets, pickConquest, type MapNode } from '../logic/conquest'
 
 const SANS = 'system-ui, sans-serif'
 const GLYPHS: Record<string, string[]> = {
@@ -33,12 +34,12 @@ const engine: Engine = {
     const { theme: th, rng, mods } = env
     const hb = env.host.getBoundingClientRect()
     const portrait = hb.height > hb.width * 1.05
-    const hex = mods.has('hex') || /hex/i.test(env.name)
+    const { hex, turn } = pickConquest(`${env.name} ${env.desc}`, mods)
     const tiny = mods.has('tiny')
     const W = portrait ? 360 : 800
     const H = portrait ? 640 : 480
     const TOP = 34
-    const BOT = 40
+    const BOT = turn ? 76 : 40
     const st = createStage(env.host, W, H)
     const ctx = st.ctx
     const k = keys()
@@ -79,6 +80,16 @@ const engine: Engine = {
     let flashMsg = ''
     let flashT = 0
     let captured = 0
+    // turn mode
+    let phase: 'plan' | 'run' = 'plan'
+    let runLeft = 0
+    let turnNo = 1
+    const maxTurns = Number(/(\d+)-turn/.exec(env.name + ' ' + env.desc)?.[1]) || byDiff(env, 40, 30, 25)
+    let science = 0
+    let researchLv = 0
+    let truce = 0
+    const RUN = 3.5
+    const researchCost = () => 6 + 4 * researchLv
     const ais: Ai[] = []
     for (let o = 1; o < nOwners; o++) ais.push({ owner: o, t: 1 + o * 0.7, style: (o + rng.int(0, 2)) % 3 })
     const msg = (s: string) => { flashMsg = s; flashT = 1.4 }
@@ -111,23 +122,30 @@ const engine: Engine = {
       const mine = nodes.filter((n) => n.owner === 0)
       const tot = nodes.filter((n) => !n.blocked).length
       env.score(score())
-      env.status(`${mine.length}/${tot} ${hex ? 'tiles' : 'bases'} · ${Math.floor(mine.reduce((s, n) => s + n.troops, 0))} troops`)
+      env.status(`${turn ? `Turn ${Math.min(turnNo, maxTurns)}/${maxTurns} · ` : ''}${mine.length}/${tot} ${hex ? 'tiles' : 'bases'} · ${Math.floor(mine.reduce((s, n) => s + n.troops, 0))} troops${turn ? ` · 🔬${science}` : ''}`)
     }
     const score = () => captured * 40 + nodes.filter((n) => n.owner === 0).length * 25
     const finish = (won: boolean) => {
       if (over) return
       over = true
-      const sc = score() + (won ? Math.max(0, 900 - Math.floor(time)) * 2 + 500 : 0)
+      const sc = score() + (won ? (turn ? Math.max(0, maxTurns - turnNo) * 20 : Math.max(0, 900 - Math.floor(time)) * 2) + 500 : 0)
       env.score(sc)
       env.sfx(won ? 'win' : 'lose')
-      env.end({ score: sc, won, text: won ? `Conquered everything in ${Math.floor(time)}s` : 'Your empire fell' })
+      env.end({ score: sc, won, text: turn ? (won ? `Ruled the map after ${Math.min(turnNo, maxTurns)} turns` : turnNo > maxTurns ? `A rival out-ruled you after ${maxTurns} turns` : 'Your empire fell') : won ? `Conquered everything in ${Math.floor(time)}s` : 'Your empire fell' })
     }
 
     // ---- player input ----
     const btnRects = () => {
       const y = H - BOT + 5
       const o = [0.25, 0.5, 0.75, 1].map((p, i) => ({ x: 6 + i * 50, y, w: 46, h: 30, p }))
-      return { pcts: o, all: { x: 6 + 4 * 50 + 4, y, w: portrait ? 70 : 96, h: 30 } }
+      const y2 = y + 34
+      const dw = (W - 12 - 8) / 3
+      return {
+        pcts: o,
+        all: { x: 6 + 4 * 50 + 4, y, w: portrait ? 70 : 96, h: 30 },
+        end: { x: W - (portrait ? 92 : 130), y, w: portrait ? 86 : 124, h: 30 },
+        decrees: [0, 1, 2].map((i) => ({ x: 6 + i * (dw + 4), y: y2, w: dw, h: 30 })),
+      }
     }
     const inR = (r: { x: number; y: number; w: number; h: number }, x: number, y: number) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h
     let drag: { x0: number; y0: number; x1: number; y1: number; on: boolean } | null = null
@@ -140,6 +158,8 @@ const engine: Engine = {
         const b = btnRects()
         for (const r of b.pcts) if (inR(r, x, y)) { pct = r.p; env.sfx('click'); return }
         if (inR(b.all, x, y)) selectAll()
+        else if (turn && inR(b.end, x, y)) endTurn()
+        else if (turn) b.decrees.forEach((r, i) => { if (inR(r, x, y)) decree(i) })
         return
       }
       const id = nodeAt(x, y)
@@ -198,6 +218,7 @@ const engine: Engine = {
       else if (e.code === 'Digit4') pct = 1
       else if (e.code === 'KeyQ') selectAll()
       else if (e.code === 'Escape') sel.clear()
+      else if (turn && (e.code === 'Space' || e.code === 'Enter')) endTurn()
     })
 
     // ---- AI ----
@@ -226,6 +247,7 @@ const engine: Engine = {
         let need = 0
         for (const t of nodes) {
           if (t.owner === o || !canSend(s.id, t.id)) continue
+          if (truce > 0 && t.owner === 0) continue
           const d = Math.hypot(t.x - s.x, t.y - s.y)
           const eta = d / speed
           const arrive = t.troops + (t.owner >= 0 ? t.prod * eta * aiMul : 0)
@@ -253,6 +275,54 @@ const engine: Engine = {
       }
     }
 
+    // ---- turn mode ----
+    const decree = (i: number) => {
+      if (over || phase !== 'plan') return
+      if (i === 0) {
+        const c = researchCost()
+        if (science < c) return msg(`Need ${c} 🔬`)
+        science -= c
+        researchLv++
+        env.sfx('power')
+        msg(`Research ${researchLv}: +12% production`)
+      } else if (i === 1) {
+        const id = [...sel].find((a) => nodes[a].owner === 0)
+        if (science < 4) return msg('Need 4 🔬')
+        if (id === undefined) return msg('Select one of your bases to recruit at')
+        science -= 4
+        nodes[id].troops += 10
+        env.sfx('click')
+        fx.burst(nodes[id].x, nodes[id].y, th.good, 12, 120)
+      } else {
+        if (truce > 0) return msg('A truce is already in force')
+        if (science < 10) return msg('Need 10 🔬')
+        science -= 10
+        truce = 3
+        env.sfx('power')
+        msg('Truce: rivals will not attack you for 3 turns')
+      }
+    }
+    const endTurn = () => {
+      if (!turn || over || phase !== 'plan') return
+      intro = 0
+      phase = 'run'
+      runLeft = RUN
+      sel.clear()
+      for (const ai of ais) { think(ai); think(ai) }
+      env.sfx('move')
+    }
+    const closeTurn = () => {
+      phase = 'plan'
+      const mine = nodes.filter((n) => n.owner === 0).length
+      science += Math.max(1, Math.round(mine * (mods.has('science') ? 1.5 : 1)))
+      turnNo++
+      if (truce > 0) truce--
+      if (turnNo > maxTurns) {
+        const cnt = (o: number) => nodes.filter((n) => n.owner === o).length
+        finish(ais.every((a) => cnt(a.owner) < cnt(0)))
+      }
+    }
+
     // ---- simulation ----
     const arrive = (f: Fleet) => {
       const n = nodes[f.to]
@@ -275,10 +345,15 @@ const engine: Engine = {
       if (flashT > 0) flashT -= dt
       if (intro > 0) intro -= dt
       if (over) return
+      if (turn) {
+        if (phase === 'plan') return
+        runLeft -= dt
+        if (runLeft <= 0) closeTurn()
+      }
       time += dt
       for (const n of nodes) {
         if (n.owner < 0 || n.blocked) continue
-        const m = n.owner > 0 ? aiMul : 1
+        const m = (n.owner > 0 ? aiMul : 1 + 0.12 * researchLv) * (turn ? 1.8 : 1)
         if (n.troops < n.cap) n.troops = Math.min(n.cap, n.troops + n.prod * m * dt)
         else n.troops -= (n.troops - n.cap) * 0.08 * dt
       }
@@ -290,7 +365,7 @@ const engine: Engine = {
         const m = f.speed * dt
         if (d <= m) { arrive(f); fleets.splice(i, 1) } else { f.x += (dx / d) * m; f.y += (dy / d) * m }
       }
-      for (const ai of ais) {
+      if (!turn) for (const ai of ais) {
         ai.t -= dt
         if (ai.t <= 0) { ai.t = byDiff(env, 2.6, 1.7, 1.1) * rng.range(0.8, 1.2); think(ai) }
       }
@@ -411,7 +486,8 @@ const engine: Engine = {
         emoji(ctx, foeEmoji[o], px + 8, 15, 15)
         T(`${cnt}`, px + 22, 15, 13, ownerColor[o], 'left')
       }
-      T(`${Math.floor(time / 60)}:${String(Math.floor(time % 60)).padStart(2, '0')}`, W - 8, 15, 12, '#a1a1aa', 'right')
+      if (turn) T(`T${Math.min(turnNo, maxTurns)}/${maxTurns} 🔬${science}${truce ? ' 🤝' : ''}`, W - 8, 15, 12, '#fde68a', 'right')
+      else T(`${Math.floor(time / 60)}:${String(Math.floor(time % 60)).padStart(2, '0')}`, W - 8, 15, 12, '#a1a1aa', 'right')
       // bottom strip
       ctx.fillStyle = 'rgba(0,0,0,.5)'
       ctx.fillRect(0, H - BOT, W, BOT)
@@ -422,15 +498,25 @@ const engine: Engine = {
       }
       roundRect(ctx, b.all.x, b.all.y, b.all.w, b.all.h, 8, 'rgba(255,255,255,.14)')
       T(portrait ? 'All' : 'Select all', b.all.x + b.all.w / 2, b.all.y + b.all.h / 2, 12, th.fg)
-      T(sel.size ? `${sel.size} selected` : portrait ? '' : (hex ? 'Tap a tile, then a neighbour' : 'Tap a base, then a target'), W - 8, H - BOT / 2, 11, '#a1a1aa', 'right')
+      if (turn) {
+        const pl = phase === 'plan'
+        roundRect(ctx, b.end.x, b.end.y, b.end.w, b.end.h, 8, pl ? th.good : 'rgba(255,255,255,.14)')
+        T(pl ? (portrait ? 'End turn ▶' : `End turn ${turnNo}/${maxTurns} ▶`) : 'Resolving…', b.end.x + b.end.w / 2, b.end.y + b.end.h / 2, 12, pl ? '#0b0b0b' : th.fg)
+        const labels = [`🔬 Research ${researchCost()}`, '🪖 Recruit 4', truce ? `🤝 Truce (${truce})` : '🤝 Truce 10']
+        const costs = [researchCost(), 4, truce ? 1e9 : 10]
+        b.decrees.forEach((r, i) => {
+          roundRect(ctx, r.x, r.y, r.w, r.h, 8, science >= costs[i] && pl ? 'rgba(250,204,21,.28)' : 'rgba(255,255,255,.08)')
+          T(labels[i], r.x + r.w / 2, r.y + r.h / 2, portrait ? 10 : 12, science >= costs[i] && pl ? '#fde68a' : '#a1a1aa')
+        })
+      } else T(sel.size ? `${sel.size} selected` : portrait ? '' : (hex ? 'Tap a tile, then a neighbour' : 'Tap a base, then a target'), W - 8, H - BOT / 2, 11, '#a1a1aa', 'right')
       if (flashT > 0) { ctx.globalAlpha = clamp(flashT, 0, 1); T(flashMsg, W / 2, TOP + 24, 14, '#fff'); ctx.globalAlpha = 1 }
       if (intro > 0) {
         ctx.globalAlpha = clamp(intro, 0, 1)
         const bwid = portrait ? 330 : 480
         roundRect(ctx, W / 2 - bwid / 2, H / 2 - 62, bwid, 124, 14, 'rgba(0,0,0,.78)', th.accent)
         text(ctx, env.name.slice(0, portrait ? 22 : 40), W / 2, H / 2 - 32, { size: portrait ? 11 : 15, color: th.accent })
-        T(hex ? 'Tap your tile, then a neighbour. Capture every tile.' : 'Tap your base, then a target: half the troops go.', W / 2, H / 2 - 2, portrait ? 11 : 13, th.fg)
-        T('Drag a box to select several. Capture everything!', W / 2, H / 2 + 22, portrait ? 11 : 13, '#a1a1aa')
+        T(turn ? 'Plan, then End turn (Space).' : hex ? 'Tap your tile, then a neighbour. Capture every tile.' : 'Tap your base, then a target: half the troops go.', W / 2, H / 2 - 2, portrait ? 11 : 13, th.fg)
+        T(turn ? `Most bases after ${maxTurns} turns wins.` : 'Drag a box to select several. Capture everything!', W / 2, H / 2 + 22, portrait ? 11 : 13, '#a1a1aa')
         T(`${nAi} rival${nAi > 1 ? 's' : ''} on the map`, W / 2, H / 2 + 46, 12, th.danger)
         ctx.globalAlpha = 1
       }
