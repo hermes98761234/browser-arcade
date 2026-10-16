@@ -1,6 +1,7 @@
 // Maze & path games: generated mazes (keys, doors, dark, versus, foes), tilt-maze with inertia, and Flow-style path drawing.
 import { background, Bag, byDiff, clamp, createStage, emoji, keys, loop, Particles, pointer, roundRect, Shake, swipe, text, vpad, type Engine, type GameEnv, type Stage } from '../kit'
 import { DIRS, distances, genFlow, genMaze, neighbors, placeLocks, solvePath, type Lock, type Maze } from '../logic/maze'
+import { bestTour, crossings, edgeIndex, genEuler, genTour, genTrace, genUntangle, tourLength, traceMoveOk, traceWon, type Euler, type Pt, type Tour, type Trace, type TraceKind, type Untangle } from '../logic/maze-modes'
 
 let W = 800
 let H = 450
@@ -1115,6 +1116,882 @@ function flowGame(G: Ctx): Scene {
   }
 }
 
+// ---------- path puzzles: trace / euler / untangle / tour ----------
+
+interface Lvl {
+  update(dt: number): void
+  win(msg: string, bonus: number): void
+  lose(msg: string): void
+  busy(): boolean
+  banner(): void
+}
+
+/** Shared level progression: score, next level, game end. */
+function levelFlow(G: Ctx, levels: number, state: { level: number; score: number; lives: number }, build: () => void, hud: () => void): Lvl {
+  const { env, c } = G
+  let pause = 0
+  let msg = ''
+  let ok = true
+  let after: (() => void) | null = null
+  let over = false
+  return {
+    update(dt) {
+      if (pause > 0) {
+        pause -= dt
+        if (pause <= 0 && after) {
+          const f = after
+          after = null
+          f()
+        }
+      }
+    },
+    win(m, bonus) {
+      if (pause > 0 || over) return
+      state.score += 100 * state.level + bonus
+      env.sfx('win')
+      msg = state.level >= levels ? 'ALL SOLVED!' : m
+      ok = true
+      pause = 1.3
+      after = () => {
+        if (state.level >= levels) {
+          over = true
+          env.end({ score: state.score, won: true, text: `Solved all ${levels} levels` })
+        } else {
+          state.level++
+          build()
+          hud()
+        }
+      }
+      hud()
+    },
+    lose(m) {
+      if (pause > 0 || over) return
+      state.lives--
+      env.sfx('lose')
+      msg = m
+      ok = false
+      pause = 1.3
+      after = () => {
+        if (state.lives <= 0) {
+          over = true
+          env.end({ score: state.score, won: false, text: `Reached level ${state.level}` })
+        } else {
+          build()
+          hud()
+        }
+      }
+      hud()
+    },
+    busy: () => pause > 0 || over,
+    banner() {
+      if (pause > 0) centerMsg(c, env, msg, '', 1)
+      c.globalAlpha = 1
+      void ok
+    },
+  }
+}
+
+const fit = (cols: number, rows: number, maxCs = 70) => {
+  const por = W < 600
+  const cs = Math.max(20, Math.min(maxCs, Math.floor((W - 24) / cols), Math.floor((H - (por ? 250 : 110)) / rows)))
+  return { cs, ox: Math.round((W - cols * cs) / 2), oy: Math.round((H - (por ? 150 : 0) - rows * cs) / 2) + (por ? 40 : 28) }
+}
+
+function traceGame(G: Ctx, kind: TraceKind): Scene {
+  const { env, c, k, fx, shake } = G
+  const t = env.theme
+  const ptr = pointer(G.st)
+  G.bag.add(() => ptr.dispose())
+  const levels = byDiff(env, 5, 6, 8)
+  const S = { level: 1, score: 0, lives: byDiff(env, 4, 3, 2) }
+  let tr!: Trace
+  let path: number[] = []
+  let cs = 50
+  let ox = 0
+  let oy = 0
+  let tt = 0
+  let lastCell = -1
+  const hud = () => {
+    env.score(S.score)
+    const total = tr.wall.filter((x) => !x).length
+    env.status(`Level ${S.level}/${levels} · ${kind === 'fill' || kind === 'knight' ? `${path.length}/${total} cells` : kind === 'visit' ? `${path.length}/${tr.limit} hose` : `${path.length} steps`} · ${'❤️'.repeat(Math.max(0, S.lives))}`)
+  }
+  const build = () => {
+    tr = genTrace(env.rng, kind, S.level, env.difficulty)
+    path = [tr.start]
+    const f = fit(tr.w, tr.h)
+    cs = f.cs
+    ox = f.ox
+    oy = f.oy
+  }
+  const flow = levelFlow(G, levels, S, build, () => hud())
+  const xy = (i: number) => ({ x: ox + ((i % tr.w) + 0.5) * cs, y: oy + (((i / tr.w) | 0) + 0.5) * cs })
+  const cellAt = (x: number, y: number) => {
+    const cx = Math.floor((x - ox) / cs)
+    const cy = Math.floor((y - oy) / cs)
+    return cx < 0 || cy < 0 || cx >= tr.w || cy >= tr.h ? -1 : cy * tr.w + cx
+  }
+  const check = () => {
+    hud()
+    if (traceWon(tr, path)) {
+      const q = xy(path[path.length - 1])
+      fx.burst(q.x, q.y, t.accent, 30, 240, 3)
+      flow.win(kind === 'right' ? 'EXIT!' : kind === 'visit' ? 'WATERED!' : 'FILLED!', Math.max(0, tr.solution.length - path.length) * 10 + 50)
+    } else if (kind === 'visit' && path.length >= tr.limit) flow.lose('HOSE TOO SHORT')
+    else if (!stuckCheck()) {
+      /* has moves */
+    }
+  }
+  const stuckCheck = () => {
+    if (flow.busy()) return true
+    const last = path[path.length - 1]
+    const has = Array.from({ length: tr.w * tr.h }, (_, i) => i).some((i) => traceMoveOk(tr, path, i) && (i !== last))
+    if (!has && !traceWon(tr, path)) {
+      hintStuck = 2
+      return false
+    }
+    return true
+  }
+  let hintStuck = 0
+  const tryMove = (cell: number) => {
+    if (flow.busy() || cell < 0) return
+    if (path.length > 1 && cell === path[path.length - 2]) {
+      path.pop()
+      env.sfx('click')
+      return check()
+    }
+    if (traceMoveOk(tr, path, cell)) {
+      path.push(cell)
+      const q = xy(cell)
+      fx.burst(q.x, q.y, t.accent, 4, 70, 2)
+      env.sfx('move')
+      check()
+    } else if (cell !== path[path.length - 1]) {
+      shake.kick(1.5)
+    }
+  }
+  const reset = () => {
+    if (flow.busy()) return
+    path = [tr.start]
+    hud()
+  }
+  ptr.onDown((p) => {
+    if (p.button !== 2) tryMove(cellAt(p.x, p.y))
+  })
+  k.onKey((e) => {
+    const last = path[path.length - 1]
+    const x = last % tr.w
+    const y = (last / tr.w) | 0
+    const mv = (dx: number, dy: number) => {
+      const nx = x + dx
+      const ny = y + dy
+      if (nx >= 0 && ny >= 0 && nx < tr.w && ny < tr.h) tryMove(ny * tr.w + nx)
+    }
+    if (kind !== 'knight') {
+      if (e.code === 'ArrowUp' || e.code === 'KeyW') mv(0, -1)
+      else if (e.code === 'ArrowDown' || e.code === 'KeyS') mv(0, 1)
+      else if (e.code === 'ArrowLeft' || e.code === 'KeyA') mv(-1, 0)
+      else if (e.code === 'ArrowRight' || e.code === 'KeyD') mv(1, 0)
+    }
+    if (e.code === 'KeyZ' || e.code === 'Backspace') {
+      if (path.length > 1) {
+        path.pop()
+        hud()
+      }
+    } else if (e.code === 'KeyR') reset()
+  })
+  build()
+  hud()
+  return {
+    update(dt) {
+      tt += dt
+      fx.update(dt)
+      shake.update(dt)
+      flow.update(dt)
+      hintStuck = Math.max(0, hintStuck - dt)
+      if (ptr.down && !flow.busy()) {
+        const cell = cellAt(ptr.x, ptr.y)
+        if (cell !== lastCell) {
+          lastCell = cell
+          if (cell >= 0 && cell !== path[path.length - 1]) tryMove(cell)
+        }
+      } else lastCell = -1
+    },
+    draw() {
+      c.save()
+      background(c, W, H, t, 40, env.seed)
+      shake.apply(c)
+      const set = new Set(path)
+      const head = path[path.length - 1]
+      for (let i = 0; i < tr.w * tr.h; i++) {
+        const q = xy(i)
+        if (tr.wall[i]) {
+          roundRect(c, q.x - cs / 2 + 3, q.y - cs / 2 + 3, cs - 6, cs - 6, 6, t.fg + '55')
+          continue
+        }
+        const on = set.has(i)
+        const next = !on && traceMoveOk(tr, path, i)
+        roundRect(c, q.x - cs / 2 + 2, q.y - cs / 2 + 2, cs - 4, cs - 4, 6, on ? t.accent + '44' : next ? (t.fg + '29') : (t.fg + '12'), next ? t.accent : (t.fg + '26'), next ? 2 : 1)
+      }
+      if (path.length > 1) {
+        c.strokeStyle = t.accent
+        c.lineWidth = Math.max(4, cs * 0.18)
+        c.lineCap = 'round'
+        c.lineJoin = 'round'
+        c.shadowColor = t.accent
+        c.shadowBlur = 10
+        c.beginPath()
+        path.forEach((cell, i) => {
+          const q = xy(cell)
+          if (i) c.lineTo(q.x, q.y)
+          else c.moveTo(q.x, q.y)
+        })
+        c.stroke()
+        c.shadowBlur = 0
+      }
+      const s0 = xy(tr.start)
+      emoji(c, '🚩', s0.x, s0.y - cs * 0.28, cs * 0.34)
+      if (tr.exit >= 0) {
+        const q = xy(tr.exit)
+        emoji(c, '🏁', q.x, q.y, cs * 0.6 + Math.sin(tt * 5) * 2)
+      }
+      for (const pl of tr.plants) {
+        const q = xy(pl)
+        const wet = [-1, 1, -tr.w, tr.w].some((d) => set.has(pl + d) && !(Math.abs(d) === 1 && ((pl + d) / tr.w | 0) !== ((pl / tr.w) | 0)))
+        c.globalAlpha = wet ? 1 : 0.7
+        emoji(c, wet ? t.items[0] : t.items[1], q.x, q.y, cs * 0.6)
+        c.globalAlpha = 1
+      }
+      const hq = xy(head)
+      emoji(c, t.hero, hq.x, hq.y, cs * 0.62, Math.sin(tt * 8) * 0.1)
+      fx.draw(c)
+      c.restore()
+      const hint = kind === 'knight' ? 'TAP a knight-move square to visit every square once' : kind === 'right' ? 'DRAG / ARROWS: go straight or turn RIGHT only, reach the flag' : kind === 'visit' ? 'DRAG a hose past every plant before it runs out' : 'DRAG / ARROWS: visit every tile exactly once  Z = undo'
+      banner(c, env, hint, tt)
+      if (hintStuck > 0) text(c, 'DEAD END - tap the previous tile or press Z', W / 2, H - 24, { size: W < 600 ? 7 : 10, color: t.danger })
+      text(c, 'R = reset', W - 60, H - 14, { size: 7, color: (t.fg + '66') })
+      flow.banner()
+    },
+  }
+}
+
+function eulerGame(G: Ctx): Scene {
+  const { env, c, k, fx, shake } = G
+  const t = env.theme
+  const ptr = pointer(G.st)
+  G.bag.add(() => ptr.dispose())
+  const levels = byDiff(env, 5, 6, 8)
+  const S = { level: 1, score: 0, lives: 3 }
+  let g!: Euler
+  let trail: number[] = []
+  let usedE = new Set<number>()
+  let cs = 80
+  let ox = 0
+  let oy = 0
+  let tt = 0
+  let lastNode = -1
+  const hud = () => {
+    env.score(S.score)
+    env.status(`Level ${S.level}/${levels} · ${usedE.size}/${g.edges.length} streets`)
+  }
+  const build = () => {
+    g = genEuler(env.rng, S.level)
+    trail = []
+    usedE = new Set()
+    const mx = Math.max(...g.nodes.map((n) => n.x))
+    const my = Math.max(...g.nodes.map((n) => n.y))
+    const f = fit(mx + 1.2, my + 1.2, 110)
+    cs = f.cs
+    ox = f.ox + cs * 0.1
+    oy = f.oy + cs * 0.1
+  }
+  const flow = levelFlow(G, levels, S, build, () => hud())
+  const xy = (i: number) => ({ x: ox + (g.nodes[i].x + 0.5) * cs, y: oy + (g.nodes[i].y + 0.5) * cs })
+  const nodeAt = (x: number, y: number) => g.nodes.findIndex((_, i) => Math.hypot(xy(i).x - x, xy(i).y - y) < Math.max(22, cs * 0.3))
+  const go = (n: number) => {
+    if (n < 0 || flow.busy()) return
+    if (!trail.length) {
+      trail = [n]
+      env.sfx('click')
+      return
+    }
+    const cur = trail[trail.length - 1]
+    if (n === cur) return
+    if (trail.length > 1 && n === trail[trail.length - 2]) {
+      usedE.delete(edgeIndex(g, cur, n))
+      trail.pop()
+      env.sfx('click')
+      return hud()
+    }
+    const e = edgeIndex(g, cur, n)
+    if (e < 0 || usedE.has(e)) {
+      shake.kick(1.5)
+      return
+    }
+    usedE.add(e)
+    trail.push(n)
+    const q = xy(n)
+    fx.burst(q.x, q.y, t.accent, 6, 90, 2)
+    env.sfx('move')
+    hud()
+    if (usedE.size === g.edges.length) flow.win('ONE STROKE!', 60)
+  }
+  ptr.onDown((p) => {
+    if (p.button !== 2) go(nodeAt(p.x, p.y))
+  })
+  k.onKey((e) => {
+    if ((e.code === 'KeyZ' || e.code === 'Backspace') && trail.length) {
+      if (trail.length > 1) usedE.delete(edgeIndex(g, trail[trail.length - 1], trail[trail.length - 2]))
+      trail.pop()
+      hud()
+    } else if (e.code === 'KeyR' && !flow.busy()) {
+      trail = []
+      usedE = new Set()
+      hud()
+    }
+  })
+  build()
+  hud()
+  return {
+    update(dt) {
+      tt += dt
+      fx.update(dt)
+      shake.update(dt)
+      flow.update(dt)
+      if (ptr.down && !flow.busy()) {
+        const n = nodeAt(ptr.x, ptr.y)
+        if (n !== lastNode) {
+          lastNode = n
+          if (n >= 0 && trail.length) go(n)
+        }
+      } else lastNode = -1
+    },
+    draw() {
+      c.save()
+      background(c, W, H, t, 40, env.seed)
+      shake.apply(c)
+      g.edges.forEach(([a, b], i) => {
+        const p = xy(a)
+        const q = xy(b)
+        c.strokeStyle = usedE.has(i) ? t.accent : (t.fg + '59')
+        c.lineWidth = usedE.has(i) ? 8 : 5
+        c.lineCap = 'round'
+        c.shadowColor = t.accent
+        c.shadowBlur = usedE.has(i) ? 10 : 0
+        c.beginPath()
+        c.moveTo(p.x, p.y)
+        c.lineTo(q.x, q.y)
+        c.stroke()
+        c.shadowBlur = 0
+      })
+      g.nodes.forEach((_, i) => {
+        const p = xy(i)
+        c.fillStyle = trail.includes(i) ? t.accent : '#222'
+        c.strokeStyle = t.fg
+        c.lineWidth = 2
+        c.beginPath()
+        c.arc(p.x, p.y, 11, 0, 7)
+        c.fill()
+        c.stroke()
+      })
+      const cur = trail.length ? xy(trail[trail.length - 1]) : null
+      if (cur) emoji(c, t.hero, cur.x, cur.y - 4, 34, Math.sin(tt * 8) * 0.1)
+      else text(c, 'TAP any junction to start', W / 2, H - 28, { size: W < 600 ? 8 : 11, color: t.accent })
+      fx.draw(c)
+      c.restore()
+      banner(c, env, 'DRAG along every street exactly once · Z = undo', tt)
+      flow.banner()
+    },
+  }
+}
+
+function untangleGame(G: Ctx): Scene {
+  const { env, c, k, fx, shake } = G
+  const t = env.theme
+  const ptr = pointer(G.st)
+  G.bag.add(() => ptr.dispose())
+  const levels = byDiff(env, 5, 6, 8)
+  const S = { level: 1, score: 0, lives: 3 }
+  let u!: Untangle
+  let pts: Pt[] = []
+  let bad: [number, number][] = []
+  let held = -1
+  let moves = 0
+  let tt = 0
+  let cooldown = 0
+  const area = () => ({ x: 30, y: W < 600 ? 90 : 70, w: W - 60, h: H - (W < 600 ? 230 : 110) })
+  const toXY = (p: Pt) => {
+    const a = area()
+    return { x: a.x + p.x * a.w, y: a.y + p.y * a.h }
+  }
+  const hud = () => {
+    env.score(S.score)
+    env.status(`Level ${S.level}/${levels} · ${bad.length} crossings · ${moves} moves`)
+  }
+  const build = () => {
+    u = genUntangle(env.rng, S.level)
+    pts = u.pts.map((p) => ({ ...p }))
+    bad = crossings(pts, u.edges)
+    moves = 0
+    held = -1
+    cooldown = 0
+  }
+  const flow = levelFlow(G, levels, S, build, () => hud())
+  const recount = () => {
+    bad = crossings(pts, u.edges)
+    hud()
+    if (!bad.length && moves > 0) {
+      for (const p of pts) {
+        const q = toXY(p)
+        fx.burst(q.x, q.y, t.good, 6, 130, 2)
+      }
+      flow.win('UNTANGLED!', Math.max(0, 30 - moves) * 5)
+    }
+  }
+  k.onKey((e) => {
+    if (e.code === 'KeyR' && !flow.busy()) {
+      pts = u.pts.map((p) => ({ ...p }))
+      recount()
+    }
+  })
+  build()
+  hud()
+  return {
+    update(dt) {
+      tt += dt
+      fx.update(dt)
+      shake.update(dt)
+      flow.update(dt)
+      cooldown -= dt
+      if (flow.busy()) return
+      if (ptr.down) {
+        if (held < 0) {
+          let bd = 34
+          pts.forEach((p, i) => {
+            const q = toXY(p)
+            const d = Math.hypot(q.x - ptr.x, q.y - ptr.y)
+            if (d < bd) {
+              bd = d
+              held = i
+            }
+          })
+          if (held >= 0) env.sfx('click')
+        } else {
+          const a = area()
+          pts[held] = { x: clamp((ptr.x - a.x) / a.w, 0, 1), y: clamp((ptr.y - a.y) / a.h, 0, 1) }
+          bad = crossings(pts, u.edges)
+          hud()
+        }
+      } else if (held >= 0) {
+        held = -1
+        moves++
+        env.sfx('move')
+        recount()
+      }
+    },
+    draw() {
+      c.save()
+      background(c, W, H, t, 40, env.seed)
+      shake.apply(c)
+      const badE = new Set(bad.flat())
+      u.edges.forEach(([a, b], i) => {
+        const p = toXY(pts[a])
+        const q = toXY(pts[b])
+        c.strokeStyle = badE.has(i) ? t.danger : t.good
+        c.lineWidth = 4
+        c.lineCap = 'round'
+        c.globalAlpha = 0.9
+        c.beginPath()
+        c.moveTo(p.x, p.y)
+        c.lineTo(q.x, q.y)
+        c.stroke()
+        c.globalAlpha = 1
+      })
+      pts.forEach((p, i) => {
+        const q = toXY(p)
+        c.fillStyle = '#1a1a2a'
+        c.strokeStyle = held === i ? t.accent : t.fg
+        c.lineWidth = held === i ? 4 : 2
+        c.beginPath()
+        c.arc(q.x, q.y, 18, 0, 7)
+        c.fill()
+        c.stroke()
+        emoji(c, i === 0 ? t.hero : t.items[i % t.items.length], q.x, q.y, 24)
+      })
+      fx.draw(c)
+      c.restore()
+      text(c, `CROSSINGS ${bad.length}`, W / 2, H - (W < 600 ? 170 : 28), { size: W < 600 ? 11 : 13, color: bad.length ? t.danger : t.good })
+      banner(c, env, 'DRAG the nodes until no lines cross · R = reset', tt)
+      flow.banner()
+    },
+  }
+}
+
+function tourGame(G: Ctx, ordered: boolean): Scene {
+  const { env, c, k, fx, shake } = G
+  const t = env.theme
+  const ptr = pointer(G.st)
+  G.bag.add(() => ptr.dispose())
+  const levels = byDiff(env, 5, 6, 8)
+  const S = { level: 1, score: 0, lives: byDiff(env, 4, 3, 2) }
+  let tour!: Tour
+  let route: number[] = []
+  let seq: number[] = []
+  let tt = 0
+  const area = () => ({ x: 30, y: W < 600 ? 90 : 70, w: W - 60, h: H - (W < 600 ? 250 : 110) })
+  const toXY = (p: Pt) => {
+    const a = area()
+    return { x: a.x + p.x * a.w, y: a.y + p.y * a.h }
+  }
+  const len = () => tourLength(tour.pts, route, false) * 1
+  const closed = () => tourLength(tour.pts, route, true)
+  const budget = () => (ordered ? tour.budget * 1.6 : tour.budget)
+  const hud = () => {
+    env.score(S.score)
+    env.status(`Level ${S.level}/${levels} · ${route.length}/${tour.pts.length} stops · ${Math.round((closed() / tour.best) * 100)}% of best`)
+  }
+  const build = () => {
+    tour = genTour(env.rng, S.level, env.difficulty)
+    route = [tour.depot]
+    seq = ordered ? bestTour(tour.pts, tour.depot).order : []
+  }
+  const flow = levelFlow(G, levels, S, build, () => hud())
+  const nodeAt = (x: number, y: number) => tour.pts.findIndex((p) => Math.hypot(toXY(p).x - x, toXY(p).y - y) < 28)
+  const check = () => {
+    hud()
+    if (route.length === tour.pts.length) {
+      const l = closed()
+      if (l <= budget()) {
+        flow.win(l <= tour.best * 1.02 ? 'PERFECT ROUTE!' : 'ROUTE DONE!', Math.round(Math.max(0, budget() - l) * 400))
+      } else flow.lose('ROUTE TOO LONG')
+    }
+  }
+  const visit = (n: number) => {
+    if (n < 0 || flow.busy()) return
+    const last = route[route.length - 1]
+    if (route.length > 1 && n === last) {
+      route.pop()
+      env.sfx('click')
+      return hud()
+    }
+    if (route.includes(n)) return
+    if (ordered && n !== seq[route.length]) {
+      shake.kick(2)
+      env.sfx('hit')
+      return
+    }
+    route.push(n)
+    const q = toXY(tour.pts[n])
+    fx.burst(q.x, q.y, t.accent, 8, 110, 2)
+    env.sfx('move')
+    check()
+  }
+  ptr.onDown((p) => {
+    if (p.button !== 2) visit(nodeAt(p.x, p.y))
+  })
+  k.onKey((e) => {
+    if ((e.code === 'KeyZ' || e.code === 'Backspace') && route.length > 1) {
+      route.pop()
+      hud()
+    } else if (e.code === 'KeyR' && !flow.busy()) {
+      route = [tour.depot]
+      hud()
+    }
+  })
+  let lastNode = -1
+  build()
+  hud()
+  return {
+    update(dt) {
+      tt += dt
+      fx.update(dt)
+      shake.update(dt)
+      flow.update(dt)
+      if (ptr.down && !flow.busy()) {
+        const n = nodeAt(ptr.x, ptr.y)
+        if (n !== lastNode) {
+          lastNode = n
+          if (n >= 0 && !route.includes(n)) visit(n)
+        }
+      } else lastNode = -1
+    },
+    draw() {
+      c.save()
+      background(c, W, H, t, 40, env.seed)
+      shake.apply(c)
+      c.strokeStyle = t.accent
+      c.lineWidth = 4
+      c.lineJoin = 'round'
+      c.shadowColor = t.accent
+      c.shadowBlur = 8
+      c.beginPath()
+      route.forEach((n, i) => {
+        const q = toXY(tour.pts[n])
+        if (i) c.lineTo(q.x, q.y)
+        else c.moveTo(q.x, q.y)
+      })
+      c.stroke()
+      c.shadowBlur = 0
+      tour.pts.forEach((p, i) => {
+        const q = toXY(p)
+        const on = route.includes(i)
+        const next = ordered && i === seq[route.length]
+        c.fillStyle = on ? t.accent + '55' : (t.fg + '1a')
+        c.strokeStyle = next ? t.accent2 : on ? t.accent : (t.fg + '66')
+        c.lineWidth = next ? 4 : 2
+        c.beginPath()
+        c.arc(q.x, q.y, 22 + (next ? Math.sin(tt * 6) * 2 : 0), 0, 7)
+        c.fill()
+        c.stroke()
+        emoji(c, i === tour.depot ? t.hero : t.items[i % t.items.length], q.x, q.y, 26)
+        if (ordered) text(c, String(seq.indexOf(i) + 1), q.x + 18, q.y - 18, { size: 9, color: t.fg })
+      })
+      fx.draw(c)
+      c.restore()
+      // length gauge
+      const bw = Math.min(360, W - 60)
+      const by = H - (W < 600 ? 160 : 28)
+      roundRect(c, W / 2 - bw / 2, by, bw, 14, 7, 'rgba(0,0,0,.45)', (t.fg + '33'), 1)
+      const frac = Math.min(1, closed() / budget())
+      c.fillStyle = frac > 0.95 ? t.danger : t.good
+      c.fillRect(W / 2 - bw / 2 + 2, by + 2, (bw - 4) * frac, 10)
+      text(c, `ROUTE ${(len() * 100).toFixed(0)}  BUDGET ${(budget() * 100).toFixed(0)}`, W / 2, by - 10, { size: 8, color: t.fg })
+      banner(c, env, ordered ? 'TAP the stops in numbered order' : 'TAP stops to visit them all and return home within the budget', tt)
+      flow.banner()
+    },
+  }
+}
+
+// ---------- draw-a-path-for-the-ball (limited ink) ----------
+
+interface Seg {
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
+function drawGame(G: Ctx): Scene {
+  const { env, c, k, fx, shake } = G
+  const t = env.theme
+  const ptr = pointer(G.st)
+  G.bag.add(() => ptr.dispose())
+  const levels = byDiff(env, 5, 6, 8)
+  const S = { level: 1, score: 0, lives: byDiff(env, 5, 4, 3) }
+  let obstacles: Seg[] = []
+  let lines: Seg[][] = []
+  let spawn = { x: 0, y: 0 }
+  let goal = { x: 0, y: 0 }
+  let ink = 0
+  let inkMax = 0
+  let ball: { x: number; y: number; vx: number; vy: number } | null = null
+  let stroke: Seg[] | null = null
+  let strokeFrom: { x: number; y: number } | null = null
+  let tt = 0
+  let ballT = 0
+  const R = 11
+  const bar = () => (W < 600 ? { y: H - 120 } : { y: H - 58 })
+  const btns = () => {
+    const y = bar().y
+    const w = W < 600 ? 120 : 130
+    const gap = (W - 3 * w) / 4
+    return [
+      { x: gap, y, w, h: 40, label: '▶ DROP', fn: drop },
+      { x: gap * 2 + w, y, w, h: 40, label: '↶ UNDO', fn: undo },
+      { x: gap * 3 + w * 2, y, w, h: 40, label: '✕ CLEAR', fn: clear },
+    ]
+  }
+  const inkUsed = () => lines.reduce((a, l) => a + l.reduce((b, s) => b + Math.hypot(s.x2 - s.x1, s.y2 - s.y1), 0), 0)
+  const hud = () => {
+    env.score(S.score)
+    env.status(`Level ${S.level}/${levels} · ink ${Math.max(0, Math.round(ink))}/${Math.round(inkMax)} · ${'❤️'.repeat(Math.max(0, S.lives))}`)
+  }
+  const build = () => {
+    const floorY = bar().y - 30
+    spawn = { x: env.rng.range(W * 0.12, W * 0.35), y: 70 }
+    goal = { x: env.rng.range(W * 0.5, W * 0.88), y: floorY - 6 }
+    obstacles = []
+    const n = Math.min(4, 1 + Math.floor(S.level / 2))
+    for (let i = 0; i < n; i++) {
+      const cx = env.rng.range(W * 0.2, W * 0.85)
+      const cy = env.rng.range(150, floorY - 100)
+      const len = env.rng.range(70, 150)
+      const a = env.rng.range(-0.4, 0.4)
+      const s = { x1: cx - Math.cos(a) * len / 2, y1: cy - Math.sin(a) * len / 2, x2: cx + Math.cos(a) * len / 2, y2: cy + Math.sin(a) * len / 2 }
+      if (Math.hypot(cx - goal.x, cy - goal.y) > 90 && Math.hypot(cx - spawn.x, cy - spawn.y) > 90) obstacles.push(s)
+    }
+    lines = []
+    ball = null
+    stroke = null
+    inkMax = Math.hypot(goal.x - spawn.x, goal.y - spawn.y) * byDiff(env, 2.6, 2.1, 1.7) + 80
+    ink = inkMax
+    hud()
+  }
+  const flow = levelFlow(G, levels, S, build, () => hud())
+  function drop() {
+    if (ball || flow.busy()) return
+    ball = { x: spawn.x, y: spawn.y, vx: 0, vy: 0 }
+    ballT = 0
+    env.sfx('click')
+  }
+  function undo() {
+    if (ball || flow.busy()) return
+    lines.pop()
+    ink = inkMax - inkUsed()
+    hud()
+  }
+  function clear() {
+    if (ball || flow.busy()) return
+    lines = []
+    ink = inkMax
+    hud()
+  }
+  ptr.onDown((p) => {
+    if (p.button === 2) return
+    for (const b of btns()) if (p.x >= b.x && p.x < b.x + b.w && p.y >= b.y && p.y < b.y + b.h) b.fn()
+  })
+  k.onKey((e) => {
+    if (e.code === 'Space' || e.code === 'Enter') drop()
+    else if (e.code === 'KeyZ' || e.code === 'Backspace') undo()
+    else if (e.code === 'KeyC') clear()
+    else if (e.code === 'KeyR') ball = null
+  })
+  const collide = (b: NonNullable<typeof ball>, s: Seg) => {
+    const dx = s.x2 - s.x1
+    const dy = s.y2 - s.y1
+    const l2 = dx * dx + dy * dy || 1
+    const u = clamp(((b.x - s.x1) * dx + (b.y - s.y1) * dy) / l2, 0, 1)
+    const px = s.x1 + dx * u
+    const py = s.y1 + dy * u
+    const d = Math.hypot(b.x - px, b.y - py)
+    if (d < R + 2 && d > 0.0001) {
+      const nx = (b.x - px) / d
+      const ny = (b.y - py) / d
+      b.x = px + nx * (R + 2)
+      b.y = py + ny * (R + 2)
+      const vn = b.vx * nx + b.vy * ny
+      if (vn < 0) {
+        b.vx -= 1.3 * vn * nx
+        b.vy -= 1.3 * vn * ny
+        b.vx *= 0.995
+        b.vy *= 0.995
+      }
+    }
+  }
+  build()
+  return {
+    update(dt) {
+      tt += dt
+      fx.update(dt)
+      shake.update(dt)
+      flow.update(dt)
+      const lim = bar().y - 8
+      if (!ball && !flow.busy()) {
+        if (ptr.down && ptr.y < lim - 4) {
+          if (!stroke) {
+            stroke = []
+            lines.push(stroke)
+          }
+          if (!strokeFrom) strokeFrom = { x: ptr.x, y: ptr.y }
+          const from = stroke.length ? { x: stroke[stroke.length - 1].x2, y: stroke[stroke.length - 1].y2 } : strokeFrom
+          const d = Math.hypot(ptr.x - from.x, ptr.y - from.y)
+          if (d > 7 && ink - d >= 0) {
+            stroke.push({ x1: from.x, y1: from.y, x2: ptr.x, y2: ptr.y })
+            ink -= d
+            hud()
+          }
+        } else if (stroke) {
+          if (!stroke.length) lines.pop()
+          stroke = null
+          strokeFrom = null
+        }
+      } else {
+        stroke = null
+        strokeFrom = null
+      }
+      if (ball) {
+        ballT += dt
+        const b = ball
+        for (let i = 0; i < 4; i++) {
+          b.vy += 900 * (dt / 4)
+          b.x += b.vx * (dt / 4)
+          b.y += b.vy * (dt / 4)
+          if (b.x < R) {
+            b.x = R
+            b.vx = Math.abs(b.vx) * 0.5
+          } else if (b.x > W - R) {
+            b.x = W - R
+            b.vx = -Math.abs(b.vx) * 0.5
+          }
+          for (const s of obstacles) collide(b, s)
+          for (const l of lines) for (const s of l) collide(b, s)
+        }
+        if (Math.hypot(b.x - goal.x, b.y - goal.y) < 34) {
+          fx.burst(goal.x, goal.y, t.good, 30, 240, 3)
+          shake.kick(4)
+          flow.win('IN THE GOAL!', Math.round(ink))
+          ball = null
+        } else if (b.y > bar().y - 10 || ballT > 14) {
+          fx.burst(b.x, Math.min(b.y, bar().y - 12), t.danger, 14, 160, 3)
+          env.sfx('hit')
+          ball = null
+          if (--S.lives <= 0) flow.lose('OUT OF TRIES')
+          hud()
+        }
+      }
+    },
+    draw() {
+      c.save()
+      background(c, W, H, t, 40, env.seed)
+      shake.apply(c)
+      c.lineCap = 'round'
+      c.strokeStyle = t.fg + '88'
+      c.lineWidth = 7
+      for (const s of obstacles) {
+        c.beginPath()
+        c.moveTo(s.x1, s.y1)
+        c.lineTo(s.x2, s.y2)
+        c.stroke()
+      }
+      c.strokeStyle = t.accent
+      c.lineWidth = 5
+      c.shadowColor = t.accent
+      c.shadowBlur = 8
+      for (const l of lines) {
+        c.beginPath()
+        l.forEach((s, i) => {
+          if (!i) c.moveTo(s.x1, s.y1)
+          c.lineTo(s.x2, s.y2)
+        })
+        c.stroke()
+      }
+      c.shadowBlur = 0
+      emoji(c, '🥅', goal.x, goal.y - 8, 58)
+      c.strokeStyle = t.good
+      c.globalAlpha = 0.5
+      c.beginPath()
+      c.arc(goal.x, goal.y, 34, 0, 7)
+      c.stroke()
+      c.globalAlpha = 1
+      const bx = ball ? ball.x : spawn.x
+      const by = ball ? ball.y : spawn.y + Math.sin(tt * 4) * 2
+      emoji(c, t.hero, bx, by, R * 2.4)
+      fx.draw(c)
+      c.restore()
+      const bw = Math.min(300, W - 60)
+      roundRect(c, W / 2 - bw / 2, bar().y - 24, bw, 10, 5, 'rgba(0,0,0,.4)', t.fg + '33', 1)
+      c.fillStyle = ink / inkMax < 0.2 ? t.danger : t.accent2
+      c.fillRect(W / 2 - bw / 2 + 2, bar().y - 22, Math.max(0, (bw - 4) * (ink / inkMax)), 6)
+      for (const b of btns()) {
+        roundRect(c, b.x, b.y, b.w, b.h, 12, 'rgba(0,0,0,.4)', t.accent2, 2)
+        text(c, b.label, b.x + b.w / 2, b.y + b.h / 2, { size: 10, color: '#fff' })
+      }
+      banner(c, env, 'DRAG to draw a path (limited ink), then DROP the ball into the goal', tt)
+      flow.banner()
+    },
+  }
+}
+
 // ---------- entry ----------
 
 const FLOW_RE = /\b(lines?|paths?|connect|routes?|wires?|rails?|trails?|threads?|yarn|strings?|pipes?|hose|dash|links?|stroke|planner|weaver|sketch)\b/i
@@ -1135,12 +2012,23 @@ const engine: Engine = {
     const k = keys({ twoPlayer: env.players === 2 })
     const bag = new Bag()
     const G: Ctx = { env, st, c: st.ctx, k, bag, fx: new Particles(), shake: new Shake() }
-    const isTilt = mods.has('tilt') || mods.has('gravity') || /\b(tilt|gravity|ball|roll)\b/i.test(env.name)
+    const isTilt = mods.has('tilt') || mods.has('gravity') || /\b(tilt|gravity|ball|roll|magnet|rotate|slime)\b/i.test(env.name)
     const isFlow = !isTilt && !mods.has('versus') && !/maze|labyrinth/i.test(env.name) && FLOW_RE.test(label)
     const dark = mods.has('dark') || /\b(dark|shadow|night|ghosts?)\b/i.test(env.name)
     const keysOn = mods.has('key') || /\b(keys?|vault|locks?|doors?)\b/i.test(env.name)
+    const nm = env.name
+    const traceKind: TraceKind | null = /dot dash|snail trail|light trail/i.test(nm) ? 'fill' : /knight/i.test(nm) ? 'knight' : /zigzag/i.test(nm) ? 'right' : /garden hose/i.test(nm) ? 'visit' : null
+    const isEuler = /one stroke|postman/i.test(nm)
+    const isUntangle = /untangle|kite strings|yarn path/i.test(nm)
+    const isDraw = /ink flow|thread the needle/i.test(nm)
+    const isTour = /starlane|trick or treat|north pole|last mile|bus route|snowplow|garbage route|mailman|crow courier|train dispatcher|snowshoe|firefly/i.test(nm)
     let scene: Scene
-    if (isFlow) scene = flowGame(G)
+    if (isDraw) scene = drawGame(G)
+    else if (traceKind) scene = traceGame(G, traceKind)
+    else if (isEuler) scene = eulerGame(G)
+    else if (isUntangle) scene = untangleGame(G)
+    else if (isTour) scene = tourGame(G, /firefly/i.test(nm))
+    else if (isFlow) scene = flowGame(G)
     else if (isTilt) scene = tiltMaze(G, keysOn)
     else {
       scene = gridMaze(G, {
@@ -1152,7 +2040,8 @@ const engine: Engine = {
         timed: mods.has('timer') || mods.has('fast') || env.difficulty === 2,
       })
     }
-    const vp = vpad(env.host, k, isFlow ? 'none' : 'dpad')
+    const pointerOnly = isDraw || !!traceKind || isEuler || isUntangle || isTour || isFlow
+    const vp = vpad(env.host, k, pointerOnly ? 'none' : 'dpad')
     const lp = loop((dt) => scene.update(dt), () => {
       G.c.clearRect(0, 0, W, H)
       scene.draw()
