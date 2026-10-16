@@ -32,14 +32,14 @@ try {
   let done = false
   for (let i = 0; i < 40 && !done; i++) {
     await sleep(300)
-    const r = await send('Runtime.evaluate', { expression: "document.querySelectorAll('.stats').length > 0", returnByValue: true })
+    const r = await send('Runtime.evaluate', { expression: `document.querySelectorAll('${process.env.SEL ?? '.card'}').length > 0`, returnByValue: true })
     done = r.result?.value === true
   }
   if (script) await send('Runtime.evaluate', { expression: script })
-  await sleep(800)
+  await sleep(Number(process.env.WAIT ?? 800))
   const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })
   writeFileSync(out, Buffer.from(shot.data, 'base64'))
-  console.log(done ? 'ready' : 'TIMED OUT waiting for .stats', '→', out)
+  console.log(done ? 'ready' : 'TIMED OUT waiting', '→', out)
   if (errors.length) console.log('page errors:\n' + errors.join('\n'))
   ws.close()
 } finally {
