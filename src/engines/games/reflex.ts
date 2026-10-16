@@ -26,7 +26,10 @@ const engine: Engine = {
     const sniper = /sniper|scope/i.test(`${env.name} ${env.desc}`)
     const multi = /multi|simultaneous/i.test(`${env.name} ${env.desc}`)
     const R = byDiff(env, 10, 12, 15)
-    const goal = mode === 'whack' ? byDiff(env, 25, 35, 45) : mode === 'aim' ? byDiff(env, 20, 28, 36) : mode === 'pulse' ? R * 8 : R
+    const nm = env.name.toLowerCase()
+    const duel = (mode === 'react' && (/duel|race/.test(nm) || env.players === 2)) || (mode === 'mash' && (/duel/.test(nm) || env.players === 2))
+    const ordered = mode === 'aim' && /numbers|in order/.test(`${nm} ${env.desc.toLowerCase()}`)
+    const goal = duel ? 3 : mode === 'whack' ? byDiff(env, 25, 35, 45) : mode === 'aim' ? byDiff(env, 20, 28, 36) : mode === 'pulse' ? R * 8 : mode === 'match' ? byDiff(env, 20, 28, 36) : mode === 'hold' ? byDiff(env, 8, 10, 12) : mode === 'mash' ? byDiff(env, 5, 6, 8) : R
     let lives = byDiff(env, 5, 4, 3) + (mods.has('zen') ? 2 : 0)
     let score = 0
     let time = 0
@@ -38,9 +41,9 @@ const engine: Engine = {
     let flash = 0
     let flashC = '#fff'
     let pops: { x: number; y: number; s: string; c: string; t: number }[] = []
-    const round = () => (mode === 'pulse' ? Math.floor(done / 8) : mode === 'whack' || mode === 'aim' ? Math.floor(done / 4) : done)
+    const round = () => (mode === 'pulse' ? Math.floor(done / 8) : mode === 'whack' || mode === 'aim' || mode === 'match' ? Math.floor(done / 4) : done)
 
-    const status = () => env.status(`${mode === 'whack' || mode === 'aim' ? `Hits ${done}/${goal}` : `Round ${Math.min(done + 1, goal)}/${goal}`} · ${'❤️'.repeat(Math.max(0, lives))}`)
+    const status = () => env.status(`${mode === 'whack' || mode === 'aim' || mode === 'match' ? `Hits ${done}/${goal}` : `Round ${Math.min(done + 1, goal)}/${goal}`} · ${'❤️'.repeat(Math.max(0, lives))}`)
     const popup = (x: number, y: number, s: string, c: string) => pops.push({ x, y, s, c, t: 0.9 })
     const win = () => {
       if (over) return
@@ -84,7 +87,7 @@ const engine: Engine = {
       if (done >= goal) win()
     }
 
-    interface M { update(dt: number): void; draw(): void; tap(x: number, y: number): void; how: string }
+    interface M { update(dt: number): void; draw(): void; tap(x: number, y: number): void; how: string; up?(): void; key?(code: string): void }
 
     // ---------------------------------------------------------- whack
     const whack = (): M => {
@@ -352,6 +355,23 @@ const engine: Engine = {
       let tm = rng.range(1, 2.6)
       let ms = 0
       let text1 = 'WAIT...'
+      const pts = [0, 0]
+      let aiT = 0.4
+      const point = (who: number, label: string) => {
+        pts[who]++
+        done = pts[0]
+        text1 = label
+        state = 'result'
+        tm = 1.1
+        ok(0, W / 2, H / 2 - 80, label, who === 0 ? t.good : t.danger)
+        env.status(`${env.players === 2 ? 'P1' : 'YOU'} ${pts[0]} - ${pts[1]} ${env.players === 2 ? 'P2' : 'RIVAL'}`)
+        if (pts[0] >= 3) win()
+        else if (pts[1] >= 3 && !over) {
+          over = true
+          if (env.players === 2) { env.sfx('win'); env.end({ score, won: true, text: 'Player 2 wins!' }) }
+          else { env.sfx('lose'); env.end({ score, won: false, text: `Lost ${pts[0]}-${pts[1]}` }) }
+        }
+      }
       const limit = () => Math.max(0.5, 1.0 - done * 0.04) / fast
       const next = () => {
         state = 'wait'
@@ -360,9 +380,16 @@ const engine: Engine = {
       }
       return {
         how: 'TAP WHEN THE SCREEN TURNS GREEN',
-        tap() {
+        tap(x) {
           const cx = W / 2
           const cy = H / 2
+          if (duel) {
+            const who = env.players === 2 && x > W / 2 ? 1 : 0
+            if (state === 'result') return
+            if (state === 'go') { point(who, `${who ? 'P2' : env.players === 2 ? 'P1' : 'YOU'} ${Math.round(ms * 1000)} MS`) }
+            else point(1 - who, 'TOO EARLY')
+            return
+          }
           if (state === 'wait') { miss(cx, cy - 80, 'TOO EARLY'); if (!over) { progress(0); next() } }
           else if (state === 'decoy') { miss(cx, cy - 80, 'DECOY'); if (!over) next() }
           else if (state === 'go') {
@@ -376,8 +403,14 @@ const engine: Engine = {
         },
         update(dt) {
           tm -= dt
+          if (duel && state === 'go') {
+            ms += dt
+            if (ms > aiT && env.players !== 2) point(1, 'RIVAL WINS')
+            return
+          }
           if (state === 'wait' && tm <= 0) {
-            if (done >= 3 && rng() < 0.3) { state = 'decoy'; tm = 0.7 }
+            if (duel) { state = 'go'; ms = 0; aiT = [0.42, 0.34, 0.27][env.difficulty] + rng() * 0.12; env.sfx('click') }
+            else if (done >= 3 && rng() < 0.3) { state = 'decoy'; tm = 0.7 }
             else { state = 'go'; ms = 0; env.sfx('click') }
           } else if (state === 'decoy' && tm <= 0) { next(); popup(W / 2, H / 2 - 80, 'GOOD HOLD', t.good) }
           else if (state === 'go') {
@@ -471,16 +504,286 @@ const engine: Engine = {
       }
     }
 
-    const M: M = { whack, bar, aim, react, pulse }[mode]()
+
+    // ---------------------------------------------------------- hold & release
+    const holdMode = (): M => {
+      const plank = /stretch|bridge|vault|tap hold|jump/.test(nm)
+      const diffK = [0.85, 1, 1.15][env.difficulty] * fast
+      let lvl = 0
+      let z0 = 0.5
+      let zw = 0.2
+      let state: 'idle' | 'fill' | 'result' = 'idle'
+      let rt = 0
+      let good = true
+      const newRound = () => {
+        zw = Math.max(0.08, [0.24, 0.19, 0.15][env.difficulty] - done * 0.008)
+        z0 = rng.range(0.38, 0.95 - zw)
+        lvl = 0
+        state = 'idle'
+      }
+      newRound()
+      const settle = () => {
+        const x = W / 2
+        const y = H / 2 - 110
+        state = 'result'
+        rt = 0.9
+        if (lvl >= z0 && lvl <= z0 + zw) {
+          good = true
+          const perfect = Math.abs(lvl - (z0 + zw / 2)) < zw * 0.2
+          ok(perfect ? 100 : 50, x, y, perfect ? 'PERFECT' : 'GOOD', perfect ? '#facc15' : t.good)
+          progress()
+        } else {
+          good = false
+          miss(x, y, lvl > 1 ? 'POP!' : lvl < z0 ? 'TOO SHORT' : 'TOO LONG')
+          if (!over) { done++; status(); if (done >= goal) win() }
+        }
+      }
+      return {
+        how: plank ? 'HOLD TO GROW · RELEASE TO LAND ON THE LEDGE' : 'HOLD TO CHARGE · RELEASE IN THE GREEN',
+        tap() {
+          if (state === 'idle') state = 'fill'
+        },
+        up() {
+          if (state === 'fill') settle()
+        },
+        update(dt) {
+          if (state === 'fill') {
+            lvl += dt * (0.5 + done * 0.035) * diffK
+            if (lvl >= 1.04) settle()
+          } else if (state === 'result') {
+            rt -= dt
+            if (rt <= 0 && !over) newRound()
+          }
+        },
+        draw() {
+          const cx = W / 2
+          if (plank) {
+            const y = H / 2 + 30
+            const lx = 70
+            const gap = W - 2 * lx - 40
+            roundRect(ctx, 0, y, lx, H, 0, t.blocks[0])
+            roundRect(ctx, lx + gap * (z0), y, gap * zw + 40, H, 0, t.good)
+            roundRect(ctx, W - 30, y, 30, H, 0, t.blocks[1])
+            const len = lvl * gap
+            ctx.fillStyle = state === 'result' && !good ? t.danger : t.accent2
+            ctx.fillRect(lx, y - 8, len, 8)
+            emoji(ctx, t.hero, lx + Math.min(len, gap) * (state === 'result' && good ? 1 : 0) + 6, y - 28, 40)
+            return
+          }
+          const gh = H * 0.55
+          const gx = cx + (portrait ? 80 : 150)
+          const gy = H / 2 + 20
+          roundRect(ctx, gx - 14, gy - gh / 2, 28, gh, 10, 'rgba(0,0,0,.4)', t.accent, 3)
+          roundRect(ctx, gx - 14, gy + gh / 2 - (z0 + zw) * gh, 28, zw * gh, 6, t.good)
+          const ly = gy + gh / 2 - Math.min(1, lvl) * gh
+          ctx.fillStyle = '#fff'
+          ctx.fillRect(gx - 20, ly - 2, 40, 4)
+          const sc = 0.7 + Math.min(1.1, lvl) * 1.1
+          ctx.save()
+          if (state === 'fill' && lvl > 0.8) ctx.translate(Math.sin(time * 60) * 3, 0)
+          emoji(ctx, state === 'result' && !good && lvl > 1 ? '💥' : t.hero, cx - (portrait ? 30 : 60), H / 2 + 20, 60 * sc)
+          ctx.restore()
+        },
+      }
+    }
+
+    // ---------------------------------------------------------- match / sort
+    const matchMode = (): M => {
+      const nb = 3
+      let cat = 0
+      let e = ''
+      let tt = 0
+      let dur = 3
+      let lock = 0
+      let dir = 0
+      const binW = W / nb
+      const next = () => {
+        cat = rng.int(0, nb - 1)
+        e = t.items[(cat + nb * rng.int(0, 1)) % t.items.length]
+        tt = 0
+        dur = Math.max(1.0, [3.2, 2.6, 2.1][env.difficulty] - round() * 0.18) / fast
+        lock = 0
+      }
+      next()
+      const pick = (b: number) => {
+        if (lock > 0) return
+        dir = b
+        lock = 0.22
+        const bx = binW * (b + 0.5)
+        if (b === cat) { ok(12, bx, H - 120, 'SORTED'); progress() }
+        else { miss(bx, H - 120, 'WRONG BIN'); if (!over) progress(0) }
+      }
+      return {
+        how: 'TAP THE BIN WHERE IT BELONGS (1 2 3)',
+        tap(x) {
+          pick(clamp(Math.floor(x / binW), 0, nb - 1))
+        },
+        key(code) {
+          if (code === 'Digit1' || code === 'ArrowLeft') pick(0)
+          else if (code === 'Digit2' || code === 'ArrowDown') pick(1)
+          else if (code === 'Digit3' || code === 'ArrowRight') pick(2)
+        },
+        update(dt) {
+          if (lock > 0) { lock -= dt; if (lock <= 0 && !over) next(); return }
+          tt += dt
+          if (tt >= dur) { miss(W / 2, H / 2, 'TOO SLOW'); if (!over) { progress(0); next() } }
+        },
+        draw() {
+          for (let b = 0; b < nb; b++) {
+            const bx = b * binW
+            roundRect(ctx, bx + 6, H - 100, binW - 12, 88, 14, t.blocks[b % t.blocks.length], b === dir && lock > 0 ? '#fff' : undefined, 3)
+            emoji(ctx, t.items[b], bx + binW / 2, H - 62, 38)
+            text(ctx, String(b + 1), bx + binW / 2, H - 26, { size: 9, color: '#fff' })
+          }
+          const u = lock > 0 ? 1 : tt / dur
+          const y = 70 + u * (H - 230)
+          const x = W / 2 + (lock > 0 ? (dir - 1) * binW * 0.9 : Math.sin(time * 3) * 8)
+          ctx.shadowColor = t.accent
+          ctx.shadowBlur = 14
+          ctx.fillStyle = t.blocks[cat % t.blocks.length]
+          ctx.beginPath()
+          ctx.arc(x, y, 34, 0, TAU)
+          ctx.fill()
+          ctx.shadowBlur = 0
+          emoji(ctx, e, x, y, 40)
+          roundRect(ctx, 20, 14, (W - 40) * (1 - u), 5, 2, t.accent)
+        },
+      }
+    }
+
+    // ---------------------------------------------------------- mash
+    const mash = (): M => {
+      const need0 = byDiff(env, 16, 22, 28)
+      let meter = 0
+      let rival = 0
+      let tl = 0
+      let lock = 0
+      let won = true
+      let aiRate = 5
+      const limit = () => (/ten second/.test(nm) ? 10 : 4.5)
+      const need = () => (/ten second/.test(nm) ? 50 + done * 8 : need0 + done * 3)
+      const newRound = () => {
+        meter = 0
+        rival = 0
+        tl = 0
+        lock = 0
+        aiRate = [4.2, 5.4, 6.4][env.difficulty] * (0.9 + rng() * 0.25)
+      }
+      newRound()
+      const finish = (w: boolean) => {
+        lock = 1
+        won = w
+        const x = W / 2
+        const y = H / 2 - 110
+        if (w) { ok(100, x, y, duel ? 'ROUND WON' : 'DONE!'); progress() }
+        else { miss(x, y, duel ? 'ROUND LOST' : 'TOO SLOW'); if (!over) { if (duel) { lost++; if (lost >= 2) { over = true; env.sfx('lose'); env.end({ score, won: false, text: 'Beaten by the rival' }) } } else { done++; status(); if (done >= goal) win() } } }
+      }
+      let lost = 0
+      return {
+        how: duel ? 'MASH SPACE / TAP TO PUSH THE MARKER' : `MASH TAP / SPACE · FILL IT IN ${limit()}s`,
+        tap(x) {
+          if (lock > 0) return
+          if (duel && env.players === 2 && x > W / 2) rival += 1 / need()
+          else meter += 1 / need()
+          env.sfx('click')
+          fx.burst(W / 2, H / 2 + 40, t.accent, 2, 90, 2)
+          if (!duel && meter >= 1) finish(true)
+          if (duel && meter - rival >= 0.5) finish(true)
+          if (duel && rival - meter >= 0.5) finish(false)
+        },
+        update(dt) {
+          if (lock > 0) { lock -= dt; if (lock <= 0 && !over) newRound(); return }
+          tl += dt
+          if (duel && env.players !== 2) {
+            rival += (aiRate / need()) * dt * (0.7 + 0.6 * Math.abs(Math.sin(time * 3)))
+            if (rival - meter >= 0.5) finish(false)
+          } else if (!duel && tl >= limit()) finish(false)
+          else if (duel && tl >= 12) finish(meter >= rival)
+        },
+        draw() {
+          const bw = W - 80
+          const by = H / 2 + 40
+          roundRect(ctx, 40, by - 20, bw, 40, 20, 'rgba(0,0,0,.45)', t.accent, 3)
+          if (duel) {
+            const m = clamp(0.5 + meter - rival, 0, 1)
+            roundRect(ctx, 40, by - 20, bw * m, 40, 20, t.good)
+            roundRect(ctx, 40 + bw * m, by - 20, bw * (1 - m), 40, 20, t.danger)
+            emoji(ctx, t.hero, 40 + bw * m, by, 44 + Math.sin(time * 30) * 3)
+            emoji(ctx, t.foes[0], W - 50, by - 50, 34)
+            emoji(ctx, t.hero, 50, by - 50, 34)
+          } else {
+            roundRect(ctx, 40, by - 20, bw * Math.min(1, meter), 40, 20, t.good)
+            emoji(ctx, t.hero, 40 + bw * Math.min(1, meter), by, 44 + Math.sin(time * 30) * 3)
+            roundRect(ctx, 40, by + 38, bw * clamp(1 - tl / limit(), 0, 1), 6, 3, t.accent)
+          }
+          if (lock > 0) text(ctx, won ? 'YES!' : 'NOPE', W / 2, by - 90, { size: 24, color: won ? t.good : t.danger, shadow: '#000' })
+        },
+      }
+    }
+
+    // ---------------------------------------------------------- ordered numbers
+    const orderedAim = (): M => {
+      interface B { x: number; y: number; n: number; e: string; gone: boolean }
+      let bs: B[] = []
+      let nextN = 1
+      let tl = 0
+      let lim = 6
+      const batch = () => {
+        const n = 4 + Math.min(4, Math.floor(done / 5))
+        bs = []
+        for (let i = 0; i < n * 20 && bs.length < n; i++) {
+          const x = rng.range(46, W - 46)
+          const y = rng.range(60, H - 46)
+          if (bs.every((b) => Math.hypot(b.x - x, b.y - y) > 70)) bs.push({ x, y, n: bs.length + 1, e: rng.pick(t.items), gone: false })
+        }
+        nextN = 1
+        tl = 0
+        lim = (bs.length * 1.5) / fast
+      }
+      batch()
+      return {
+        how: 'TAP THE NUMBERS IN ORDER',
+        tap(x, y) {
+          const b = bs.find((q) => !q.gone && Math.hypot(q.x - x, q.y - y) < 34)
+          if (!b) return
+          if (b.n === nextN) { b.gone = true; nextN++; ok(10, b.x, b.y - 20, 'POP'); progress(); if (nextN > bs.length && !over) batch() }
+          else { miss(b.x, b.y, 'WRONG ORDER'); if (!over) progress(0) }
+        },
+        update(dt) {
+          tl += dt
+          if (tl >= lim) { miss(W / 2, H / 2, 'TIME UP'); if (!over) { progress(0); batch() } }
+        },
+        draw() {
+          for (const b of bs) {
+            if (b.gone) continue
+            ctx.fillStyle = b.n === nextN ? t.accent : t.accent2
+            ctx.globalAlpha = 0.85
+            ctx.beginPath()
+            ctx.arc(b.x, b.y, 30, 0, TAU)
+            ctx.fill()
+            ctx.globalAlpha = 1
+            emoji(ctx, b.e, b.x, b.y - 4, 34)
+            text(ctx, String(b.n), b.x, b.y + 8, { size: 12, color: '#fff', shadow: '#000' })
+          }
+          roundRect(ctx, 20, 14, (W - 40) * clamp(1 - tl / lim, 0, 1), 5, 2, t.accent)
+        },
+      }
+    }
+
+    const M: M = ordered ? orderedAim() : { whack, bar, aim, react, pulse, hold: holdMode, match: matchMode, mash }[mode]()
     const tap = (x: number, y: number) => {
       if (intro > 0.15) { intro = 0; return }
       if (over) return
       M.tap(x, y)
     }
     ptr.onDown((p) => tap(p.x, p.y))
+    ptr.onUp(() => { if (!over && intro <= 0) M.up?.() })
+    bag.on(window, 'keyup', (e) => { if ((e.code === 'Space' || e.code === 'Enter') && !over && intro <= 0) M.up?.() })
     k.onKey((e) => {
       if (e.repeat) return
-      if (e.code === 'Space' || e.code === 'Enter') tap(ptr.active ? ptr.x : W / 2, ptr.active ? ptr.y : H / 2)
+      if (!over && intro <= 0.15) M.key?.(e.code)
+      const p2 = env.players === 2 && (e.code === 'KeyL' || e.code === 'Enter')
+      if (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyL') tap(p2 ? W * 0.75 : env.players === 2 ? W * 0.25 : ptr.active ? ptr.x : W / 2, ptr.active ? ptr.y : H / 2)
     })
     status()
     env.score(0)

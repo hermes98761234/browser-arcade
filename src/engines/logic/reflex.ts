@@ -1,8 +1,17 @@
 // Pure helpers for the reflex engine: micro-mode detection, judging and difficulty curves.
-export type ReflexMode = 'whack' | 'bar' | 'aim' | 'react' | 'pulse'
+export type ReflexMode = 'whack' | 'bar' | 'aim' | 'react' | 'pulse' | 'hold' | 'match' | 'mash'
 
 export function detectReflex(name: string, desc: string): ReflexMode {
-  const s = `${name} ${desc}`.toLowerCase()
+  const n = name.toLowerCase()
+  const s = `${n} ${desc.toLowerCase()}`
+  if (/mash|ten second|clockwork heart/.test(n)) return 'mash'
+  if (/whack|mole|bubble wrap|swat|rivet/.test(n)) return 'whack'
+  if (/sorting|rapid sort|color switch|sushi conveyor/.test(n)) return 'match'
+  if (/hold|long press|lockpick|bubble blow|stretcher|glassblower|sneeze|pole vault/.test(n)) return 'hold'
+  if (/reaction|quick draw|high noon|flash|freeze|ruler|signal|slap|watering|duel/.test(n)) return 'react'
+  if (/pulse|rhythm|beat|rope|new year|parry|pogo|cauldron|simon/.test(n)) return 'pulse'
+  if (/aim|target|sniper|kunai|pinpoint|dart|balloon|laser tag|catch the fly|goalie|unplug|sushi grab|wagon|bubble float/.test(n)) return 'aim'
+  if (/stop|bar\b|timing|forge|smith|bell|bat\b|cricket|bottle|joust|anchor|mantis|perfect|elevator|wok|microwave|fishing|bobbing|defuse|wheel|dial|twist|needle|pick/.test(n)) return 'bar'
   if (/whack|mole|hammer|bubble wrap|pop every/.test(s)) return 'whack'
   if (/reaction|green|freeze|ruler|flash|light/.test(s)) return 'react'
   if (/pulse|rhythm|beat|rope|simon|countdown/.test(s)) return 'pulse'

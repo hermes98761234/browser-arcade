@@ -9,6 +9,14 @@ describe('reflex logic', () => {
     expect(detectReflex('Flash Freeze', 'freeze when lights flash')).toBe('react')
     expect(detectReflex('Pinpoint Pulse', 'tap on rhythmic pulse peaks')).toBe('pulse')
   })
+  it('routes the new modes', () => {
+    expect(detectReflex('Button Mash Duel', 'mashing contest')).toBe('mash')
+    expect(detectReflex('Rapid Sort', 'swipe items to correct bins')).toBe('match')
+    expect(detectReflex('Bridge Stretcher', 'hold to grow plank')).toBe('hold')
+    expect(detectReflex('Hammer Bell', 'strike carnival bell perfectly')).toBe('bar')
+    expect(detectReflex('Mole Hammer Timing', 'single button whack timing')).toBe('whack')
+    expect(detectReflex('Microwave Countdown', 'reheat items perfectly')).toBe('bar')
+  })
   it('judges and tightens', () => {
     expect(judge(0.01, 0, 1)).toBe('perfect')
     expect(judge(0.3, 0, 1)).toBe('miss')
