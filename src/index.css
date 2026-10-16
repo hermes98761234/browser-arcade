@@ -297,8 +297,9 @@ h1, h2, h3 { line-height: 1.2; }
 
 /* ---------- responsive ---------- */
 @media (max-width: 860px) {
-  .hero { grid-template-columns: 1fr; padding: 20px; }
-  .info { grid-template-columns: 1fr; }
+  .hero { grid-template-columns: minmax(0, 1fr); padding: 20px; }
+  .hero-text, .hero-stories { min-width: 0; }
+  .info { grid-template-columns: minmax(0, 1fr); }
   .nav { order: 3; flex-basis: 100%; overflow-x: auto; flex-wrap: nowrap; }
   .nav a, .btn-random { white-space: nowrap; }
   .stage { height: min(70vh, 75vw); }
@@ -329,3 +330,14 @@ h1, h2, h3 { line-height: 1.2; }
   .player-head h1 { font-size: 22px; }
 }
 .ga-vpad { inset: auto 0 0 0; height: 138px; align-items: center; padding: 0 14px; background: linear-gradient(transparent, rgb(0 0 0 / 0.35)); }
+
+/* never let any section widen the page on phones */
+html, body { overflow-x: hidden; }
+.arcade { overflow-x: clip; }
+.catalog, .player, .hero, .toolbar, .grid { min-width: 0; max-width: 100%; }
+@media (max-width: 520px) {
+  .hero h1 { font-size: 28px; }
+  .hero-stats { font-size: 12px; }
+  .story-row { grid-auto-columns: 150px; }
+  .results-head span { font-size: 12px; }
+}
